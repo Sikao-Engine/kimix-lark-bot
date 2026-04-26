@@ -1,10 +1,30 @@
 # -*- coding: utf-8 -*-
-"""Kimix opencode-style HTTP / SSE async client.
+# @file client.py
+# @brief OpenCode (opencode) 异步 HTTP / SSE 客户端
+# @author sailing-innocent
+# @date 2026-04-25
+# @version 1.0
+# ---------------------------------
+"""kimix_lark_bot.oc_client.client — OpenCode 异步 HTTP / SSE 客户端。
 
-Replaces the old KimixJsonRpcClient / KimixWebSocketClient / KimixSessionClient
-with an HTTP REST + SSE client that talks to `kimix serve`.
+**只提供异步客户端 OpenCodeAsyncClient**。
 
-API surface mirrors sail.opencode.client for consistency.
+进程管理中需要同步健康检查的场景（如 subprocess.Popen 等待启动），
+请使用模块级辅助函数 check_health_sync(port)。
+
+SSE 格式说明
+-----------
+OpenCode 的 /event 全局端点推送两种格式:
+
+格式 A (opencode 原生):
+    message.part.updated  — 文本/工具/推理部分更新
+    message.part.delta    — 增量文本
+    session.idle          — 任务完成
+
+格式 B (简化格式):
+    text / reasoning / tool / step-start / step-finish
+
+两种格式均由 kimix_lark_bot.oc_client.sse_parser.parse_event 统一解码。
 """
 
 from __future__ import annotations
@@ -12,10 +32,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 import httpx
 
@@ -31,6 +50,10 @@ class MessagePartType(str, Enum):
     REASONING = "reasoning"
     STEP_START = "step-start"
     STEP_FINISH = "step-finish"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    IMAGE = "image"
+    FILE = "file"
     UNKNOWN = "unknown"
 
 
@@ -65,8 +88,7 @@ class MessagePart:
         elif msg_type == MessagePartType.REASONING:
             part.text = data.get("text")
         elif msg_type == MessagePartType.STEP_FINISH:
-            state = data.get("state", {})
-            part.reason = state.get("reason")
+            part.reason = data.get("reason")
             part.cost = data.get("cost")
             part.tokens = data.get("tokens")
         elif msg_type == MessagePartType.UNKNOWN:
@@ -79,7 +101,7 @@ class Message:
     id: str
     role: str
     parts: List[MessagePart] = field(default_factory=list)
-    created_at: Optional[float] = None
+    created_at: Optional[str] = None
 
     @property
     def text_content(self) -> str:
@@ -103,8 +125,8 @@ class Message:
 class Session:
     id: str
     title: Optional[str] = None
-    created_at: Optional[float] = None
-    updated_at: Optional[float] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     parent_id: Optional[str] = None
 
     @classmethod
@@ -138,197 +160,7 @@ class SSEEvent:
         return self.event == "__reconnected__"
 
 
-# ── Event Type / Parsed Event ─────────────────────────────────────
-
-
-class EventType(str, Enum):
-    TEXT = "text"
-    TEXT_DELTA = "text_delta"
-    REASONING = "reasoning"
-    TOOL = "tool"
-    PERMISSION = "permission"
-    STEP_START = "step-start"
-    STEP_FINISH = "step-finish"
-    SESSION_IDLE = "session_idle"
-    RECONNECTED = "reconnected"
-    SKIP = "skip"
-    UNKNOWN = "unknown"
-
-
-@dataclass
-class ParsedEvent:
-    type: EventType = EventType.UNKNOWN
-    text: str = ""
-    delta: str = ""
-    tool_name: str = ""
-    tool_status: str = ""
-    tool_title: str = ""
-    tool_input: str = ""
-    tool_output: str = ""
-    tool_error: str = ""
-    tool_call_id: str = ""
-    created_at: float = 0.0
-    permission_id: str = ""
-    finished: bool = False
-    cost: float = 0.0
-    tokens: Dict[str, Any] = field(default_factory=dict)
-    raw: Dict[str, Any] = field(default_factory=dict)
-
-    def is_terminal(self) -> bool:
-        if self.type == EventType.SESSION_IDLE:
-            return True
-        if self.type == EventType.STEP_FINISH:
-            return self.text not in ("tool-calls", "tool_calls")
-        return False
-
-
-# ── SSE Event Parser ─────────────────────────────────────────────
-
-
-def parse_event(event: SSEEvent, session_id: str = "") -> ParsedEvent:
-    """Parse a raw SSE event into a structured ParsedEvent.
-
-    Compatible with both opencode native format and kimix format.
-    """
-    if event.event == "__reconnected__":
-        return ParsedEvent(
-            type=EventType.RECONNECTED,
-            text=f"SSE reconnected (attempt {event.data})",
-        )
-
-    data = event.json()
-    if not data:
-        return ParsedEvent(type=EventType.SKIP)
-
-    event_type: str = data.get("type", "")
-
-    if event_type in ("server.connected", "server.heartbeat"):
-        return ParsedEvent(type=EventType.SKIP)
-
-    # Session filtering
-    if session_id and not _matches_session(data, session_id):
-        return ParsedEvent(type=EventType.SKIP)
-
-    if event_type == "message.part.updated":
-        return _parse_part_updated(data)
-
-    if event_type in ("message.updated", "message.created", "session.updated", "session.created"):
-        return ParsedEvent(type=EventType.SKIP)
-
-    if event_type == "message.part.delta":
-        return _parse_part_delta(data)
-
-    if event_type in ("session.idle", "session.status"):
-        return _parse_session_status(data, event_type)
-
-    return ParsedEvent(type=EventType.UNKNOWN, raw=data)
-
-
-def _parse_part_updated(data: Dict[str, Any]) -> ParsedEvent:
-    props = data.get("properties", {})
-    part = props.get("part", {})
-    delta = props.get("delta", "")
-    part_type = part.get("type", "")
-
-    if part_type == "text":
-        return ParsedEvent(
-            type=EventType.TEXT,
-            delta=delta,
-            text=part.get("text", ""),
-            raw=data,
-        )
-    if part_type == "tool":
-        state = part.get("state", {})
-        tool_name = (
-            part.get("tool")
-            or state.get("tool")
-            or part.get("name")
-            or state.get("name")
-            or state.get("title")
-            or "unknown"
-        )
-        if not tool_name:
-            tool_name = "unknown"
-        status = state.get("status", "")
-        title = state.get("title") or tool_name
-        if not title:
-            title = tool_name
-        logger.debug(
-            "[parse_event tool] tool_name=%r status=%r call_id=%r part=%r state=%r",
-            tool_name, status, state.get("toolCallId", ""), part, state,
-        )
-        return ParsedEvent(
-            type=EventType.TOOL,
-            tool_name=tool_name,
-            tool_status=status,
-            tool_title=title,
-            tool_input=state.get("input", ""),
-            tool_output=state.get("output", ""),
-            tool_error=state.get("error", ""),
-            tool_call_id=state.get("toolCallId", ""),
-            created_at=part.get("createdAt", 0.0),
-            raw=data,
-        )
-    if part_type == "reasoning":
-        return ParsedEvent(
-            type=EventType.REASONING,
-            text=part.get("text", ""),
-            delta=delta,
-            raw=data,
-        )
-    if part_type == "step-start":
-        return ParsedEvent(type=EventType.STEP_START, raw=data)
-    if part_type == "step-finish":
-        state = part.get("state", {})
-        reason = state.get("reason", "")
-        finished = reason not in ("tool-calls", "tool_calls")
-        return ParsedEvent(
-            type=EventType.STEP_FINISH,
-            text=reason,
-            finished=finished,
-            raw=data,
-        )
-    return ParsedEvent(type=EventType.SKIP)
-
-
-def _parse_part_delta(data: Dict[str, Any]) -> ParsedEvent:
-    props = data.get("properties", {})
-    delta = props.get("delta", "")
-    field_name = props.get("field", "")
-    if delta and field_name in ("text", "reasoning"):
-        return ParsedEvent(
-            type=EventType.TEXT_DELTA,
-            delta=delta,
-            text=delta,
-            raw=data,
-        )
-    return ParsedEvent(type=EventType.SKIP)
-
-
-def _parse_session_status(data: Dict[str, Any], event_type: str) -> ParsedEvent:
-    if event_type == "session.status":
-        props = data.get("properties", {})
-        status = props.get("status", {})
-        status_type = status.get("type", "") if isinstance(status, dict) else ""
-        if status_type != "idle":
-            return ParsedEvent(type=EventType.SKIP)
-    return ParsedEvent(type=EventType.SESSION_IDLE, finished=True, raw=data)
-
-
-def _matches_session(data: Dict[str, Any], session_id: str) -> bool:
-    props = data.get("properties", {})
-    sid: Optional[str] = (
-        props.get("sessionID")
-        or props.get("session_id")
-        or data.get("sessionID")
-    )
-    if not sid:
-        info = props.get("info", {}) if props else {}
-        sid = info.get("sessionID")
-    return not sid or sid == session_id
-
-
-# ── Sync Helpers ──────────────────────────────────────────────────
+# ── 同步辅助函数（无需创建客户端对象）────────────────────────────
 
 
 def check_health_sync(
@@ -336,9 +168,9 @@ def check_health_sync(
     host: str = "127.0.0.1",
     timeout: float = 3.0,
 ) -> bool:
-    """Synchronous health check for process management contexts."""
+    """同步健康检查，用于进程管理等同步上下文。"""
     try:
-        with httpx.Client(timeout=httpx.Timeout(timeout), trust_env=False) as c:
+        with httpx.Client(timeout=httpx.Timeout(timeout)) as c:
             resp = c.get(f"http://{host}:{port}/global/health")
             return bool(resp.json().get("healthy", False))
     except Exception:
@@ -351,9 +183,9 @@ def abort_session_sync(
     host: str = "127.0.0.1",
     timeout: float = 10.0,
 ) -> bool:
-    """Synchronous session abort."""
+    """同步中止 session，适用于无法使用 async 的回调中。"""
     try:
-        with httpx.Client(timeout=httpx.Timeout(timeout), trust_env=False) as c:
+        with httpx.Client(timeout=httpx.Timeout(timeout)) as c:
             resp = c.post(f"http://{host}:{port}/session/{session_id}/abort")
             return resp.status_code == 200
     except Exception:
@@ -363,14 +195,14 @@ def abort_session_sync(
 # ── Async Client ──────────────────────────────────────────────────
 
 
-class KimixAsyncClient:
-    """Async HTTP + SSE client for kimix serve (opencode-style API).
+class OpenCodeAsyncClient:
+    """异步 OpenCode 客户端，内置 SSE 事件流支持。
 
-    Drop-in replacement for the old KimixSessionClient.
+    推荐用于所有任务执行和实时进度监听。
 
     Example::
 
-        async with KimixAsyncClient(port=4096) as client:
+        async with OpenCodeAsyncClient(port=4096) as client:
             sess = await client.create_session("My Task")
             ok = await client.send_prompt_async(sess.id, "write tests")
             async for event in client.stream_events_robust(sess.id):
@@ -388,31 +220,43 @@ class KimixAsyncClient:
         self.host = host
         self.port = port
         self._base_url = f"http://{host}:{port}"
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout), trust_env=False)
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
 
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def __aenter__(self) -> "KimixAsyncClient":
+    async def __aenter__(self) -> "OpenCodeAsyncClient":
         return self
 
     async def __aexit__(self, *args: Any) -> bool:
         await self.close()
         return False
 
-    # ── Health ────────────────────────────────────────────────
+    # ── Health ────────────────────────────────────────────────────
 
     async def health_check(self) -> bool:
+        """异步健康检查。"""
         try:
-            url = f"{self._base_url}/global/health"
-            resp = await self._client.get(url)
+            resp = await self._client.get(f"{self._base_url}/global/health")
             data = resp.json()
-            return bool(data.get("healthy", False))
+            healthy = data.get("healthy", False)
+            if not healthy:
+                logger.warning(
+                    "[OpenCode] health_check: healthy=False, response=%s", data
+                )
+            return bool(healthy)
+        except httpx.ConnectError as exc:
+            logger.warning(
+                "[OpenCode] health_check: 无法连接 %s — %s", self._base_url, exc
+            )
+            return False
         except Exception as exc:
-            logger.warning("[KimixClient] health_check: %s: %s", type(exc).__name__, exc)
+            logger.warning(
+                "[OpenCode] health_check: %s: %s", type(exc).__name__, exc
+            )
             return False
 
-    # ── Session CRUD ─────────────────────────────────────────
+    # ── Session CRUD ──────────────────────────────────────────────
 
     async def create_session(self, title: Optional[str] = None) -> Session:
         body = {"title": title} if title else {}
@@ -434,7 +278,9 @@ class KimixAsyncClient:
         resp.raise_for_status()
         return [Session.from_dict(s) for s in resp.json()]
 
-    async def get_messages(self, session_id: str, limit: int = 10) -> List[Message]:
+    async def get_messages(
+        self, session_id: str, limit: int = 10
+    ) -> List[Message]:
         resp = await self._client.get(
             f"{self._base_url}/session/{session_id}/message",
             params={"limit": limit},
@@ -447,18 +293,21 @@ class KimixAsyncClient:
         resp.raise_for_status()
         return resp.json()
 
-    # ── Messaging ────────────────────────────────────────────
+    # ── Messaging ─────────────────────────────────────────────────
 
     async def send_prompt_async(
         self,
         session_id: str,
         text: str,
         agent: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> bool:
-        """Fire-and-forget prompt (HTTP 204)."""
+        """Fire-and-forget prompt (HTTP 204)。"""
         body: Dict[str, Any] = {"parts": [{"type": "text", "text": text}]}
         if agent:
             body["agent"] = agent
+        if model:
+            body["model"] = model
         resp = await self._client.post(
             f"{self._base_url}/session/{session_id}/prompt_async", json=body
         )
@@ -469,12 +318,15 @@ class KimixAsyncClient:
         session_id: str,
         text: str,
         agent: Optional[str] = None,
+        model: Optional[str] = None,
         timeout: float = 600.0,
     ) -> Message:
-        """Send message and wait for the response (blocking)."""
+        """发送消息并等待响应（阻塞直到 LLM 回复）。"""
         body: Dict[str, Any] = {"parts": [{"type": "text", "text": text}]}
         if agent:
             body["agent"] = agent
+        if model:
+            body["model"] = model
         resp = await self._client.post(
             f"{self._base_url}/session/{session_id}/message",
             json=body,
@@ -489,25 +341,53 @@ class KimixAsyncClient:
         )
         return resp.status_code == 200
 
-    # ── SSE Streaming ────────────────────────────────────────
+    # ── Agent / Config / Permission ───────────────────────────────
+
+    async def list_agents(self) -> List[Dict[str, Any]]:
+        resp = await self._client.get(f"{self._base_url}/agent")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_config(self) -> Dict[str, Any]:
+        resp = await self._client.get(f"{self._base_url}/config")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def respond_permission(
+        self,
+        session_id: str,
+        permission_id: str,
+        response: str = "allow",
+        remember: bool = True,
+    ) -> bool:
+        """响应权限请求 (allow / deny)。"""
+        body = {"response": response, "remember": remember}
+        resp = await self._client.post(
+            f"{self._base_url}/session/{session_id}/permissions/{permission_id}",
+            json=body,
+        )
+        return resp.status_code == 200
+
+    # ── SSE Streaming ─────────────────────────────────────────────
 
     async def stream_events(
         self,
         session_id: str,
         timeout: float = 14400.0,
     ) -> AsyncIterator[SSEEvent]:
-        """Stream SSE events from /event endpoint."""
+        """从全局 /event 端点流式读取 SSE 事件。
+
+        注意: /event 是全局端点，会推送所有 session 的事件。
+        配合 sse_parser.parse_event(event, session_id) 过滤。
+        """
         url = f"{self._base_url}/event"
-        request = self._client.build_request(
-            "GET", url, timeout=httpx.Timeout(timeout, connect=10.0, read=timeout)
-        )
-        response = await self._client.send(request, stream=True)
-        try:
-            response.raise_for_status()
-            async for event in _parse_sse_stream(response):
-                yield event
-        finally:
-            await response.aclose()
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout, connect=10.0, read=timeout)
+        ) as stream_client:
+            async with stream_client.stream("GET", url) as response:
+                response.raise_for_status()
+                async for event in _parse_sse_stream(response):
+                    yield event
 
     async def stream_events_robust(
         self,
@@ -517,7 +397,11 @@ class KimixAsyncClient:
         reconnect_delay: float = 2.0,
         on_reconnect: Optional[Callable[[int], None]] = None,
     ) -> AsyncIterator[SSEEvent]:
-        """SSE stream with auto-reconnect."""
+        """带自动重连的 SSE 事件流。
+
+        断线时自动重连，每次重连前产生一个
+        ``SSEEvent(event="__reconnected__")`` 哨兵事件。
+        """
         reconnects = 0
         while reconnects <= max_reconnects:
             try:
@@ -533,9 +417,15 @@ class KimixAsyncClient:
             ) as exc:
                 reconnects += 1
                 if reconnects > max_reconnects:
-                    logger.error("[SSE] Max reconnects reached: %s", exc)
+                    logger.error(
+                        "[SSE] Max reconnects reached for session %s: %s",
+                        session_id[:16], exc,
+                    )
                     raise
-                logger.warning("[SSE] Reconnecting (%d/%d): %s", reconnects, max_reconnects, exc)
+                logger.warning(
+                    "[SSE] Reconnecting session %s (%d/%d): %s",
+                    session_id[:16], reconnects, max_reconnects, exc,
+                )
                 if on_reconnect:
                     on_reconnect(reconnects)
                 await asyncio.sleep(reconnect_delay * reconnects)
@@ -544,10 +434,11 @@ class KimixAsyncClient:
 
 # ── SSE Stream Parser (internal) ──────────────────────────────────
 
+
 async def _parse_sse_stream(
     response: httpx.Response,
 ) -> AsyncIterator[SSEEvent]:
-    """Parse HTTP response body into SSEEvent stream."""
+    """将 HTTP 响应体解析为 SSEEvent 流（内部使用）。"""
     current = SSEEvent()
     data_lines: List[str] = []
 
@@ -563,7 +454,7 @@ async def _parse_sse_stream(
             continue
 
         if line.startswith(":"):
-            continue  # SSE comment / heartbeat
+            continue  # SSE 注释行（心跳）
 
         if ":" in line:
             field_name, _, value = line.partition(":")

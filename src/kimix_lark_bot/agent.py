@@ -16,7 +16,7 @@ from kimix_lark_bot.context import ConversationContext
 from kimix_lark_bot.brain import BotBrain
 from kimix_lark_bot.process_manager import KimixProcessManager
 from kimix_lark_bot.messaging import FeishuMessagingClient
-from kimix_lark_bot.handlers import HandlerContext, MessageHandler
+from kimix_lark_bot.handler import HandlerContext, MessageHandler
 
 logger = logging.getLogger(__name__)
 
