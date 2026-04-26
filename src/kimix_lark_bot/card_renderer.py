@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Simple card renderer for Feishu interactive messages."""
 
+import json
 from typing import Optional, List, Dict, Any
 
 
@@ -134,11 +135,70 @@ def help_card(projects: List[Dict[str, str]], processes: List[Any]) -> dict:
 _CARD_CONTENT_MAX_CHARS = 2800
 
 
+def _format_jsonish(value: Any, max_len: int = 120) -> str:
+    """Try to pretty-print dict/list as JSON, else str()."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        try:
+            raw = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            raw = str(value)
+    else:
+        raw = str(value)
+    raw = raw.replace("\n", " ")
+    if len(raw) > max_len:
+        raw = raw[: max_len - 3] + "..."
+    return raw
+
+
+def _tool_status_icon(status: str) -> str:
+    return {
+        "running": "🔄",
+        "completed": "✅",
+        "done": "✅",
+        "error": "❌",
+        "pending": "⏳",
+        "queued": "⏳",
+    }.get(status, "⏳")
+
+
+def _build_tool_lines(tools: List[Dict[str, Any]], max_tools: int = 8) -> List[str]:
+    """Build compact, informative tool status lines."""
+    lines: List[str] = []
+    visible = tools[-max_tools:] if len(tools) > max_tools else tools
+    omitted = len(tools) - len(visible)
+    if omitted > 0:
+        lines.append(f"*...还有 {omitted} 个工具*")
+
+    for t in visible:
+        status = t.get("status", "")
+        name = t.get("title") or t.get("name") or "unknown"
+        icon = _tool_status_icon(status)
+        lines.append(f"{icon} **`{name}`**")
+
+        inp = _format_jsonish(t.get("input"), 100)
+        out = _format_jsonish(t.get("output"), 120)
+        err = _format_jsonish(t.get("error"), 120)
+
+        if status == "running" and inp:
+            lines.append(f"  > 输入: `{inp}`")
+        elif status in ("completed", "done") and out:
+            lines.append(f"  > 结果: `{out}`")
+        elif status == "error" and err:
+            lines.append(f"  > 错误: `{err}`")
+        elif inp and not out and not err:
+            # Show input even when waiting if we have it
+            lines.append(f"  > 输入: `{inp}`")
+
+    return lines
+
+
 def streaming_progress(
     title: str,
     task_text: str,
     elapsed: int,
-    tools: Optional[List[Dict[str, str]]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
     reasoning_snippet: str = "",
     text_snippet: str = "",
     finished: bool = False,
@@ -149,7 +209,7 @@ def streaming_progress(
         title: Card header title.
         task_text: Original task text (truncated for display).
         elapsed: Elapsed seconds.
-        tools: List of dicts with keys 'name', 'status', 'title'.
+        tools: List of dicts with keys 'name', 'status', 'title', 'input', 'output', 'error', 'call_id'.
         reasoning_snippet: Latest reasoning text snippet.
         text_snippet: Latest text output snippet (tail).
         finished: Whether the task is done.
@@ -163,18 +223,7 @@ def streaming_progress(
 
     # Tool activity section
     if tools:
-        tool_lines = []
-        for t in tools[-8:]:  # Show last 8 tools
-            status = t.get("status", "")
-            name = t.get("title") or t.get("name", "unknown")
-            if status == "running":
-                tool_lines.append(f"🔄 `{name}`")
-            elif status in ("completed", "done"):
-                tool_lines.append(f"✅ `{name}`")
-            elif status == "error":
-                tool_lines.append(f"❌ `{name}`")
-            else:
-                tool_lines.append(f"⏳ `{name}`")
+        tool_lines = _build_tool_lines(tools)
         _add_text(card, "**工具调用:**\n" + "\n".join(tool_lines))
 
     # Reasoning snippet
@@ -194,6 +243,34 @@ def streaming_progress(
     # Status line
     status_text = f"✅ 已完成 ({elapsed}s)" if finished else f"⏳ 运行中 ({elapsed}s)"
     _add_text(card, status_text)
+
+    # Guard: if card JSON exceeds limit, aggressively truncate text snippets
+    content = json.dumps(card, ensure_ascii=False)
+    if len(content) > _CARD_CONTENT_MAX_CHARS:
+        over = len(content) - _CARD_CONTENT_MAX_CHARS + 50
+        # Trim text_snippet first
+        if text_snippet:
+            for el in card["elements"]:
+                txt = el.get("text", {}).get("content", "")
+                if txt.startswith("**输出预览:**"):
+                    el["text"]["content"] = "**输出预览:**\n*(内容过长，已在结果中展示)*"
+                    break
+        # Re-check
+        content = json.dumps(card, ensure_ascii=False)
+        if len(content) > _CARD_CONTENT_MAX_CHARS and reasoning_snippet:
+            for el in card["elements"]:
+                txt = el.get("text", {}).get("content", "")
+                if txt.startswith("**思考中:**"):
+                    el["text"]["content"] = "**思考中:**\n*(思考过程已折叠)*"
+                    break
+        # Last resort: trim tools
+        content = json.dumps(card, ensure_ascii=False)
+        if len(content) > _CARD_CONTENT_MAX_CHARS and tools:
+            for el in card["elements"]:
+                txt = el.get("text", {}).get("content", "")
+                if txt.startswith("**工具调用:**"):
+                    el["text"]["content"] = f"**工具调用:** {len(tools)} 个工具已调用"
+                    break
 
     return card
 

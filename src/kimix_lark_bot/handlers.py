@@ -26,7 +26,7 @@ from kimix_lark_bot.process_manager import KimixProcessManager, extract_path_fro
 from kimix_lark_bot.config import AgentConfig
 from kimix_lark_bot.brain import BotBrain
 
-from kimix_lark_bot.kimix_client_x import (
+from kimix_lark_bot.kimix_client import (
     KimixAsyncClient, EventType, check_health_sync, parse_event,
 )
 
@@ -638,6 +638,7 @@ class TaskHandler(BaseHandler):
 
         # Mutable state for progress card
         tools: List[Dict[str, str]] = []
+        tool_call_registry: Dict[str, Dict[str, str]] = {}
         reasoning_text = ""
         output_text = ""
         last_update = 0.0
@@ -689,14 +690,44 @@ class TaskHandler(BaseHandler):
                     _update_card_throttled()
 
                 elif parsed.type == EventType.TOOL:
+                    call_id = parsed.tool_call_id
+                    logger.debug(
+                        "[TOOL event] call_id=%r tool_name=%r tool_status=%r registry_keys=%s",
+                        call_id, parsed.tool_name, parsed.tool_status, list(tool_call_registry.keys()),
+                    )
+                    # Maintain registry so we can backfill missing tool names on completion
+                    if call_id:
+                        if parsed.tool_name and parsed.tool_name != "unknown":
+                            tool_call_registry[call_id] = {
+                                "name": parsed.tool_name,
+                                "title": parsed.tool_title or parsed.tool_name,
+                            }
+                            logger.debug("[TOOL registry] saved call_id=%r name=%r", call_id, parsed.tool_name)
+                        elif call_id in tool_call_registry:
+                            old_name = parsed.tool_name
+                            parsed.tool_name = tool_call_registry[call_id]["name"]
+                            parsed.tool_title = tool_call_registry[call_id]["title"]
+                            logger.debug("[TOOL registry] backfilled call_id=%r %r -> %r", call_id, old_name, parsed.tool_name)
+                        else:
+                            logger.debug("[TOOL registry] no entry for call_id=%r", call_id)
+
                     tool_entry = {
                         "name": parsed.tool_name,
                         "status": parsed.tool_status,
                         "title": parsed.tool_title,
+                        "input": parsed.tool_input,
+                        "output": parsed.tool_output,
+                        "error": parsed.tool_error,
+                        "call_id": call_id,
                     }
                     # Update existing tool entry or add new one
                     updated = False
                     for i, t in enumerate(tools):
+                        # Prefer call_id matching; fall back to name + non-terminal status
+                        if call_id and t.get("call_id") == call_id:
+                            tools[i] = tool_entry
+                            updated = True
+                            break
                         if t["name"] == parsed.tool_name and t["status"] not in ("completed", "done"):
                             tools[i] = tool_entry
                             updated = True
