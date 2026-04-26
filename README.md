@@ -84,23 +84,3 @@ kimix_lark_bot -c bot.yaml
 
 在工作区模式下，直接发送消息即可与 Kimix 交互。
 
-## 架构
-
-类似 `sail_bot`，但管理的是 `kimix server` 进程：
-
-- **KimixProcessManager**: 管理 kimix server 进程生命周期
-- **KimixSessionClient**: 通过 JSON-RPC TCP 或 WebSocket 与 kimix server 通信
-- **FeishuBotAgent**: 飞书 Bot 主入口，处理消息事件
-- **BotBrain**: 意图识别，支持关键词匹配
-
-## Kimix 通信接口
-
-Kimix server 提供 JSON-RPC TCP 接口：
-
-- `open_session(client_id)` -> session_id
-- `close_session(client_id, session_id)` -> "ok"
-- `input_from_client(client_id, session_id, text)` -> "processing"
-- `get_output_from_client(client_id, session_id)` -> list[str]
-- `is_session_finished(client_id, session_id)` -> bool
-
-支持通过 `--ws-port` 启动 WebSocket bridge，Bot 可自动选择 TCP 或 WebSocket 连接。
