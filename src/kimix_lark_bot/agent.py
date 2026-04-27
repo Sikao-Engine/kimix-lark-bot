@@ -1,5 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Kimix Lark Bot Agent - Main entry point."""
+# @file agent.py
+# @brief Feishu Bot Agent - Main entry point (v3.0 refactored)
+# @author sailing-innocent
+# @date 2026-04-25
+# @version 3.0
+# ---------------------------------
+"""Feishu Bot Agent - Main entry point.
+
+v3.0: 使用 kimix_lark_bot.opencode 基础设施层，精简 self-update，
+移除对 async_task_manager / session_manager / opencode_client 的直接依赖。
+
+协调组件:
+- Message handling (via MessageHandler)
+- Card action handling (via CardActionHandler)
+- Plan execution (via PlanExecutor)
+- Lifecycle management (via LifecycleManager)
+- Process management (via kimix_lark_bot.opencode.OpenCodeProcessManager)
+- Self-update (via SelfUpdateOrchestrator, exit code 42)
+"""
 
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -11,45 +29,79 @@ from datetime import datetime
 
 import lark_oapi as lark
 
+from kimix_lark_bot.self_update_orchestrator import SelfUpdateOrchestrator
 from kimix_lark_bot.config import AgentConfig
-from kimix_lark_bot.context import ConversationContext
+from kimix_lark_bot.session_state import (
+    ConfirmationManager,
+    OperationTracker,
+    SessionState,
+    SessionStateStore,
+)
 from kimix_lark_bot.brain import BotBrain
-from kimix_lark_bot.process_manager import KimixProcessManager
+from kimix_lark_bot.context import ConversationContext
 from kimix_lark_bot.messaging import FeishuMessagingClient
-from kimix_lark_bot.handlers import HandlerContext, MessageHandler
+from kimix_lark_bot.handlers import (
+    HandlerContext,
+    MessageHandler,
+    CardActionHandler,
+    PlanExecutor,
+    LifecycleManager,
+    WelcomeHandler,
+)
+from kimix_lark_bot.opencode import OpenCodeProcessManager, check_health_sync
 
 logger = logging.getLogger(__name__)
 
-_CONTEXTS_FILE = Path("data/kimix_bot/state/contexts.json")
-
 
 class FeishuBotAgent:
-    CONTEXT_STATE_FILE = _CONTEXTS_FILE
+    """Feishu bot that bridges messages to OpenCode web sessions."""
+
+    from kimix_lark_bot.paths import CONTEXTS_FILE
+
+    CONTEXT_STATE_FILE = CONTEXTS_FILE
 
     def __init__(self, config: AgentConfig):
         self.config = config
 
-        # Process management
-        self.process_mgr = KimixProcessManager(
+        # State management
+        self.state_store = SessionStateStore()
+        self.state_store.load_from_disk()
+
+        # Process management (replaces old OpenCodeSessionManager)
+        self.process_mgr = OpenCodeProcessManager(
             base_port=config.base_port,
             projects=config.projects,
+            cli_tool=config.cli_tool,
         )
+
+        self.op_tracker = OperationTracker()
+        self.confirm_mgr = ConfirmationManager()
 
         # Messaging client
         self.messaging = FeishuMessagingClient(default_chat_id=config.default_chat_id)
         self.lark_client: Optional[lark.Client] = None
 
         # AI brain
-        self.brain = BotBrain(config.projects)
+        self.brain = BotBrain(
+            config.projects,
+            llm_provider=config.llm_provider,
+            llm_api_key=config.llm_api_key,
+        )
 
         # Conversation contexts
         self._contexts: Dict[str, ConversationContext] = {}
         self._load_contexts()
 
+        # Self-update orchestrator (simplified)
+        self._update_orchestrator = SelfUpdateOrchestrator()
+
         # Create handler context
         self._handler_ctx = HandlerContext(
             messaging=self.messaging,
             process_mgr=self.process_mgr,
+            state_store=self.state_store,
+            op_tracker=self.op_tracker,
+            confirm_mgr=self.confirm_mgr,
             brain=self.brain,
             config=self.config,
             agent=self,
@@ -57,8 +109,16 @@ class FeishuBotAgent:
 
         # Initialize handlers
         self._message_handler = MessageHandler(self._handler_ctx)
+        self._card_action_handler = CardActionHandler(self._handler_ctx)
+        self._plan_executor = PlanExecutor(self._handler_ctx)
+        self._lifecycle = LifecycleManager(self)
+        self._welcome_handler = WelcomeHandler(self._handler_ctx)
 
-        logger.info("FeishuBotAgent initialized")
+        logger.info("FeishuBotAgent initialized (v3.0)")
+
+    # ------------------------------------------------------------------
+    # Context management
+    # ------------------------------------------------------------------
 
     def _get_context(self, chat_id: str) -> ConversationContext:
         if chat_id not in self._contexts:
@@ -87,10 +147,11 @@ class FeishuBotAgent:
                     procs = {p.path: p for p in self.process_mgr.list_processes()}
                     proc = procs.get(ctx.active_workspace)
                     if not proc or not proc.is_alive:
-                        logger.warning("Resetting context for %s: workspace not running", chat_id)
+                        logger.warning(
+                            "Resetting context for %s: workspace not running", chat_id
+                        )
                         ctx.mode = "idle"
                         ctx.active_workspace = None
-                        ctx.active_session_id = None
                         reset_count += 1
 
                 self._contexts[chat_id] = ctx
@@ -98,7 +159,9 @@ class FeishuBotAgent:
             if self._contexts:
                 logger.info("Loaded %s conversation(s)", len(self._contexts))
             if reset_count > 0:
-                logger.warning("Reset %s context(s) due to missing connection", reset_count)
+                logger.warning(
+                    "Reset %s context(s) due to missing connection", reset_count
+                )
         except Exception as exc:
             logger.error("Failed to load contexts: %s", exc, exc_info=True)
 
@@ -115,34 +178,106 @@ class FeishuBotAgent:
         except Exception as exc:
             logger.error("Failed to save contexts: %s", exc, exc_info=True)
 
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
     def _handle_message(self, data: lark.im.v1.P2ImMessageReceiveV1) -> None:
         try:
             if not data or not data.event or not data.event.message:
-                logger.debug("_handle_message: empty data or message")
                 return
             message = data.event.message
-            logger.debug("_handle_message: type=%s chat_id=%s msg_id=%s", message.message_type, message.chat_id, message.message_id)
             if message.message_type != "text":
-                logger.debug("_handle_message: ignoring non-text message")
                 return
             self._message_handler.handle(data)
         except Exception as exc:
             logger.error("Message handling error: %s", exc, exc_info=True)
-            traceback.print_exc()
 
-    def _handle_p2p_chat_entered(self, data: lark.im.v1.P2ImChatAccessEventBotP2pChatEnteredV1) -> None:
+    def _handle_card_action(self, data) -> Any:
+        try:
+            return self._card_action_handler.handle(data)
+        except Exception as exc:
+            logger.error("Card action error: %s", exc, exc_info=True)
+            return None
+
+    def _handle_p2p_chat_entered(
+        self, data: lark.im.v1.P2ImChatAccessEventBotP2pChatEnteredV1
+    ) -> None:
         try:
             if not data or not data.event:
                 return
             chat_id = data.event.chat_id
             if chat_id:
                 logger.info("User entered P2P chat: %s", chat_id)
-                self.messaging.send_text(chat_id, "你好！我是 Kimix Bot。发送「帮助」查看可用指令。")
+                self._welcome_handler.handle(chat_id)
         except Exception as exc:
             logger.error("P2P chat entered error: %s", exc, exc_info=True)
 
+    def _check_and_notify_update_completion(self) -> None:
+        """检查是否有待完成的更新通知，并在 Bot 重启后发送完成消息。
+
+        这是 self-update 流程的最后一步：当 watcher 执行 git pull 并重启 Bot 后，
+        新进程会读取持久化的更新上下文，向用户发送更新已完成的消息。
+        """
+        try:
+            pending = SelfUpdateOrchestrator.load_and_clear_pending_update()
+            if not pending:
+                return
+
+            chat_id = pending.get("chat_id")
+            reason = pending.get("reason", "")
+            if not chat_id:
+                logger.warning("[UpdateNotify] Pending update has no chat_id")
+                return
+
+            # Build completion message card
+            from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
+            import platform
+            from datetime import datetime
+
+            hostname = platform.node() or "Unknown"
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            content = (
+                f"🤖 Bot 已成功重启并恢复服务\n\n"
+                f"📍 **主机**: {hostname}\n"
+                f"🕐 **完成时间**: {now}\n"
+            )
+            if reason:
+                content += f"📝 **更新原因**: {reason}\n"
+            content += "\n✅ 更新流程全部完成"
+
+            completion_card = CardRenderer.result(
+                "🎉 更新完成",
+                content,
+                success=True,
+            )
+            self.messaging.send_card(chat_id, completion_card)
+            logger.info(
+                "[UpdateNotify] Update completion notification sent to %s", chat_id
+            )
+
+        except Exception as exc:
+            logger.error(
+                "[UpdateNotify] Failed to send update completion notification: %s",
+                exc,
+                exc_info=True,
+            )
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     def run(self) -> int:
-        print("Kimix Lark Bot v1.0")
+        """Start the bot and return exit code.
+
+        Returns:
+            0: normal exit
+            42: self-update restart (watcher will git pull + restart)
+        """
+        self._lifecycle.cleanup_previous_instances()
+
+        print(f"Feishu Agent Bridge v8.0 (tool={self.config.cli_tool})")
         logger.info("Config: %s", self.config.config_path)
 
         if not self.config.app_id or not self.config.app_secret:
@@ -153,8 +288,9 @@ class FeishuBotAgent:
         if self.config.projects:
             slugs = [p.get("slug", "") for p in self.config.projects]
             logger.info("Projects: %s", ", ".join(slugs))
-        else:
-            logger.info("No projects configured")
+
+        # Startup
+        self._lifecycle.on_startup()
 
         # Initialize Lark client
         self.lark_client = (
@@ -169,6 +305,7 @@ class FeishuBotAgent:
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._handle_message)
+            .register_p2_card_action_trigger(self._handle_card_action)
             .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(
                 self._handle_p2p_chat_entered
             )
@@ -185,70 +322,37 @@ class FeishuBotAgent:
         logger.info("Connecting to Feishu (long connection)...")
         logger.info("Send '帮助' in Feishu to see available commands.")
 
-        # Startup notification
-        if self.config.admin_chat_id:
-            try:
-                self.messaging.send_text(self.config.admin_chat_id, "🤖 Kimix Bot 已启动")
-            except Exception as exc:
-                logger.warning("Startup notification failed: %s", exc)
+        # Send startup notification
+        self._lifecycle._notify_startup()
+
+        # Check for pending update completion (from self-update restart)
+        self._check_and_notify_update_completion()
 
         exit_code = 0
         shutdown_event = threading.Event()
-        ws_error: Optional[Exception] = None
 
-        def _run_ws() -> None:
-            nonlocal ws_error
-            try:
-                logger.debug("WebSocket thread starting...")
-                ws_client.start()
-            except Exception as exc:
-                ws_error = exc
-                logger.error("WebSocket client error: %s", exc, exc_info=True)
-
-        ws_thread = threading.Thread(target=_run_ws, daemon=True)
+        # Start ws_client in a separate thread (blocking call)
+        ws_thread = threading.Thread(target=ws_client.start, daemon=True)
         ws_thread.start()
 
-        # Wait a bit and check if WS thread died immediately
-        ws_thread.join(timeout=3.0)
-        if not ws_thread.is_alive():
-            if ws_error:
-                logger.error("WebSocket failed to start: %s", ws_error)
-            else:
-                logger.error("WebSocket thread exited immediately without error")
-            logger.error("Possible causes: invalid app_id/app_secret, network issue, or Feishu app not published")
-            return 1
-
-        logger.info("WebSocket client connected")
-
-        heartbeat_counter = 0
         try:
             while not shutdown_event.is_set():
-                shutdown_event.wait(1.0)
-                heartbeat_counter += 1
-                if heartbeat_counter % 30 == 0:
-                    logger.info("Bot is running... (heartbeat)")
-                if not ws_thread.is_alive():
-                    logger.error("WebSocket thread died unexpectedly")
+                if self._update_orchestrator.should_exit():
+                    logger.warning("Self-update requested, shutting down...")
                     break
+                shutdown_event.wait(0.1)
         except KeyboardInterrupt:
             logger.info("Stopped by user")
         except Exception as exc:
             logger.error("Fatal error: %s", exc, exc_info=True)
             exit_code = 1
         finally:
-            logger.info("Shutting down...")
             if hasattr(ws_client, "stop"):
-                try:
-                    ws_client.stop()
-                except Exception as exc:
-                    logger.warning("Error stopping ws_client: %s", exc)
-            count = self.process_mgr.stop_all()
-            logger.info("Stopped %d process(es)", count)
-            self._save_contexts()
-            if self.config.admin_chat_id:
-                try:
-                    self.messaging.send_text(self.config.admin_chat_id, "🛑 Kimix Bot 已关闭")
-                except Exception:
-                    pass
+                ws_client.stop()
+            self._lifecycle.on_shutdown()
+
+            if self._update_orchestrator.should_exit():
+                exit_code = self._update_orchestrator.exit_code
+                logger.info("Exiting with code %s for self-update", exit_code)
 
         return exit_code
