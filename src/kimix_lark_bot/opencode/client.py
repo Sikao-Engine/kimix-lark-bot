@@ -170,7 +170,10 @@ def check_health_sync(
 ) -> bool:
     """同步健康检查，用于进程管理等同步上下文。"""
     try:
-        with httpx.Client(timeout=httpx.Timeout(timeout)) as c:
+        with httpx.Client(
+            timeout=httpx.Timeout(timeout),
+            trust_env=False,  # 不读取 HTTP_PROXY 等环境变量，避免本地连接被转发
+        ) as c:
             resp = c.get(f"http://{host}:{port}/global/health")
             return bool(resp.json().get("healthy", False))
     except Exception:
@@ -185,7 +188,10 @@ def abort_session_sync(
 ) -> bool:
     """同步中止 session，适用于无法使用 async 的回调中。"""
     try:
-        with httpx.Client(timeout=httpx.Timeout(timeout)) as c:
+        with httpx.Client(
+            timeout=httpx.Timeout(timeout),
+            trust_env=False,  # 不读取 HTTP_PROXY 等环境变量，避免本地连接被转发
+        ) as c:
             resp = c.post(f"http://{host}:{port}/session/{session_id}/abort")
             return resp.status_code == 200
     except Exception:
@@ -220,7 +226,10 @@ class OpenCodeAsyncClient:
         self.host = host
         self.port = port
         self._base_url = f"http://{host}:{port}"
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout),
+            trust_env=False,  # 不读取 HTTP_PROXY 等环境变量，避免本地连接被转发
+        )
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -237,7 +246,9 @@ class OpenCodeAsyncClient:
     async def health_check(self) -> bool:
         """异步健康检查。"""
         try:
-            resp = await self._client.get(f"{self._base_url}/global/health")
+            url = f"{self._base_url}/global/health"
+            print(url)
+            resp = await self._client.get(url)
             data = resp.json()
             healthy = data.get("healthy", False)
             if not healthy:
@@ -382,7 +393,8 @@ class OpenCodeAsyncClient:
         """
         url = f"{self._base_url}/event"
         stream_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=10.0, read=timeout)
+            timeout=httpx.Timeout(timeout, connect=10.0, read=timeout),
+            trust_env=False,  # 不读取 HTTP_PROXY 等环境变量，避免本地连接被转发
         )
         response_ctx = None
         try:

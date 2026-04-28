@@ -3,3 +3,4 @@ bot.yaml
 *.egg-info
 __pycache__/
 data/*
+sse_log_*

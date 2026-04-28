@@ -172,7 +172,10 @@ def check_cli_compatibility(
 
         # Level 4: API 端点测试
         base = f"http://127.0.0.1:{test_port}"
-        with httpx.Client(timeout=api_timeout) as client:
+        with httpx.Client(
+            timeout=api_timeout,
+            trust_env=False,  # 不读取 HTTP_PROXY 等环境变量，避免本地连接被转发
+        ) as client:
             # GET /session
             try:
                 resp = client.get(f"{base}/session")

@@ -196,7 +196,10 @@ class OpenCodeProcessManager:
         try:
             import httpx
             title = f"SailZen - {Path(path).name}"
-            with httpx.Client(timeout=10.0) as c:
+            with httpx.Client(
+                timeout=10.0,
+                trust_env=False,  # 不读取 HTTP_PROXY 等环境变量，避免本地连接被转发
+            ) as c:
                 resp = c.post(
                     f"http://127.0.0.1:{proc.port}/session",
                     json={"title": title},
