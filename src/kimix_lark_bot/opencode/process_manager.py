@@ -452,7 +452,7 @@ def extract_path_from_text(text: str, projects: List[Dict[str, str]]) -> Optiona
             return p.get("path", "")
         if label and label.lower() in text_lower:
             return p.get("path", "")
-    for pattern in [r"([~/][^\s]+)", r"([A-Z]:\\[^\s]+)", r"([A-Z]:/[^\s]+)"]:
+    for pattern in [r"([A-Z]:/[^\s]+)", r"([A-Z]:\\[^\s]+)", r"([~/][^\s]+)"]:
         m = re.search(pattern, text)
         if m:
             return m.group(1)

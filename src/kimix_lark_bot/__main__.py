@@ -69,9 +69,14 @@ def main() -> int:
         help="Maximum consecutive restarts in watcher mode (default: 5)",
     )
     args = parser.parse_args()
-
+    config_path = args.config
+    config_path_obj = Path(config_path)
+    if not config_path_obj.exists() and not config_path_obj.is_absolute():
+        fallback = Path(__file__).parent.parent.parent / config_path
+        if fallback.exists():
+            config_path = str(fallback)
     if args.init:
-        create_default_config(args.config)
+        create_default_config(config_path)
         return 0
 
     if args.support_update:
@@ -82,7 +87,7 @@ def main() -> int:
             extra.append("--restore-state")
 
         watcher = BotWatcher(
-            config_path=args.config,
+            config_path=config_path,
             max_restarts=args.max_restarts,
             extra_args=extra,
         )
@@ -92,7 +97,7 @@ def main() -> int:
             print("\n[Watcher] Stopped by user")
         return 0
 
-    return run_worker(args.config, restore_state=args.restore_state)
+    return run_worker(config_path, restore_state=args.restore_state)
 
 
 if __name__ == "__main__":
