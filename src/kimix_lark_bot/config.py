@@ -1,12 +1,13 @@
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict
+from __future__ import annotations
+
 import logging
-import yaml
-import sys
 from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -15,33 +16,52 @@ _VALID_LLM_PROVIDERS = frozenset(
 )
 
 
-@dataclass
-class AgentConfig:
+class AgentConfig(BaseModel):
+    """Bot configuration with validation."""
+
     app_id: str = ""
     app_secret: str = ""
-    base_port: int = 4096
-    max_sessions: int = 10
+    projects: list[dict[str, str]] = Field(default_factory=list)
+    cli_tool: str = "opencode-cli"
+    base_port: int = Field(default=4096, ge=1024, le=65535)
+    max_sessions: int = Field(default=10, ge=1, le=50)
     callback_timeout: int = 300
     auto_restart: bool = False
-    config_path: Optional[str] = None
-    projects: List[Dict[str, str]] = field(default_factory=list)
-    admin_chat_id: Optional[str] = None
-    default_chat_id: Optional[str] = None
-    llm_provider: Optional[str] = None
-    llm_api_key: Optional[str] = None
-    cli_tool: str = "opencode-cli"
+    llm_provider: str | None = None
+    llm_api_key: str | None = None
+    admin_chat_id: str | None = None
+    default_chat_id: str | None = None
+    config_path: str | None = None
 
-    def validate(self) -> List[str]:
+    @field_validator(
+        "llm_provider", "llm_api_key", "admin_chat_id", "default_chat_id", mode="before"
+    )
+    @classmethod
+    def _empty_to_none(cls, v: object) -> str | None:
+        return v if v else None
+
+    @field_validator("projects", mode="before")
+    @classmethod
+    def _filter_projects(cls, v: object) -> list[dict[str, str]]:
+        if not isinstance(v, list):
+            return []
+        return [
+            {
+                "slug": str(p.get("slug", "")),
+                "path": str(p.get("path", "")),
+                "label": str(p.get("label", "")),
+            }
+            for p in v
+            if isinstance(p, dict) and p.get("path")
+        ]
+
+    def validate(self) -> list[str]:
         """Return list of validation warnings (empty = all good)."""
-        warnings = []
+        warnings: list[str] = []
         if not self.app_id:
             warnings.append("app_id is empty - Feishu connection will fail")
         if not self.app_secret:
             warnings.append("app_secret is empty - Feishu connection will fail")
-        if not (1024 <= self.base_port <= 65535):
-            warnings.append(f"base_port {self.base_port} out of range [1024, 65535]")
-        if self.max_sessions < 1 or self.max_sessions > 50:
-            warnings.append(f"max_sessions {self.max_sessions} out of range [1, 50]")
         if self.llm_provider and self.llm_provider not in _VALID_LLM_PROVIDERS:
             warnings.append(
                 f"Unknown llm_provider: {self.llm_provider} (valid: {', '.join(_VALID_LLM_PROVIDERS)})"
@@ -59,74 +79,44 @@ class AgentConfig:
 
 
 def load_config(config_path: str) -> AgentConfig:
-    config = AgentConfig(config_path=config_path)
     p = Path(config_path)
-    if not p.exists():
-        return config
+    data: dict = {}
+    if p.exists():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except Exception as exc:
+            logger.error("Failed to read config %s: %s", config_path, exc)
+
     try:
-        with open(p, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+        config = AgentConfig(config_path=config_path, **data)
+    except ValidationError as exc:
+        logger.error("Failed to parse config %s: %s", config_path, exc)
+        config = AgentConfig(config_path=config_path)
 
-        config.app_id = data.get("app_id", "")
-        config.app_secret = data.get("app_secret", "")
-        config.base_port = data.get("base_port", 4096)
-        config.max_sessions = data.get("max_sessions", 10)
-        config.callback_timeout = data.get("callback_timeout", 300)
-        config.auto_restart = data.get("auto_restart", False)
-        raw_projects = data.get("projects", [])
-        config.projects = [
-            {
-                "slug": p.get("slug", ""),
-                "path": p.get("path", ""),
-                "label": p.get("label", ""),
-            }
-            for p in raw_projects
-            if p.get("path")
-        ]
-        config.llm_provider = data.get("llm_provider") or None
-        config.llm_api_key = data.get("llm_api_key") or None
-        config.admin_chat_id = data.get("admin_chat_id") or None
-        config.default_chat_id = data.get("default_chat_id") or None
-        config.cli_tool = data.get("cli_tool", "opencode-cli")
-
-        warnings = config.validate()
-        for w in warnings:
-            logger.warning("Config: %s", w)
-
-    except Exception as exc:
-        logger.error("Failed to load config %s: %s", config_path, exc)
+    for w in config.validate():
+        logger.warning("Config: %s", w)
     return config
 
 
 def create_default_config(config_path: str) -> None:
     p = Path(config_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    content = """\
+
+    config = AgentConfig(
+        projects=[
+            {"slug": "sailzen", "path": "~/repos/SailZen", "label": "SailZen"}
+        ]
+    )
+
+    header = """\
 # Feishu Agent Bridge Configuration
 # Usage: uv run bot/feishu_agent.py -c bot/opencode.bot.yaml
 
 # Feishu App Credentials (Required)
 # Get from: https://open.feishu.cn/app
-app_id: ""
-app_secret: ""
-
-# Optional: Named project shortcuts
-# Use slug in Feishu: '启动 sailzen'
-projects:
-  - slug: "sailzen"
-    path: "~/repos/SailZen"
-    label: "SailZen"
-
-# CLI tool for agent runtime (must support `serve` subcommand with opencode-compatible API)
-# Examples: opencode-cli, kimix
-cli_tool: "opencode-cli"
-
-# Session settings
-base_port: 4096     # Starting port for agent serve instances
-max_sessions: 10
-callback_timeout: 300
-auto_restart: false
-
+"""
+    footer = """\
 # Optional: LLM settings for intent understanding
 # If not set, falls back to environment variables (MOONSHOT_API_KEY, etc.)
 # Supported providers: moonshot, openai, google, deepseek, anthropic
@@ -135,14 +125,25 @@ auto_restart: false
 
 # Optional: Admin notification settings
 # admin_chat_id: "oc_xxxxxxxxxxxxxxxx"  # 管理员的chat_id，用于接收启动/关闭通知
-# 可以通过在飞书中 @机器人 并查看消息的 chat_id 获取
-# 或者先跟机器人单聊，然后查看收到的消息的 chat_id
 
 # Optional: Default chat for proactive messages
-# default_chat_id: "oc_xxxxxxxxxxxxxxxx"  # 默认chat_id，用于机器人主动发送消息（如长期任务通知）
-# 不设置时，主动发送功能将不可用
+# default_chat_id: "oc_xxxxxxxxxxxxxxxx"  # 默认chat_id，用于机器人主动发送消息
 """
+    payload = config.model_dump(
+        exclude={"config_path"},
+        exclude_none=True,
+    )
+    yaml_body = yaml.dump(
+        payload,
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=False,
+    )
+
     with open(p, "w", encoding="utf-8") as f:
-        f.write(content)
+        f.write(header)
+        f.write("\n")
+        f.write(yaml_body)
+        f.write(footer)
     print(f"Created config: {config_path}")
     print("Please edit and add your Feishu credentials.")
