@@ -90,6 +90,8 @@ class _EventCollector:
                 "tool": parsed.tool_name or "unknown",
                 "status": status,
                 "content": parsed.tool_title,
+                "call_id": parsed.tool_call_id,
+                "input": parsed.tool_input,
             })
         elif parsed.type in (EventType.TEXT, EventType.TEXT_DELTA):
             content = parsed.delta or parsed.text

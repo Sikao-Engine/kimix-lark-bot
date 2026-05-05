@@ -485,10 +485,26 @@ class CardRenderer:
                 status = tc.get("status", "unknown")
                 icon = _tool_icons.get(status, "🔧")
                 error = tc.get("error", "")
-                line = f"{icon} {name} → {status}"
+                call_id = tc.get("call_id", "")
+                tool_input = tc.get("input", "")
+
+                # Main line: icon + name + status
+                main_line = f"{icon} {name}"
                 if error:
-                    line += f" (err: {error[:40]})"
-                elements.append(note(line))
+                    main_line += f" ❌ {error[:40]}"
+                elements.append(note(main_line))
+
+                # Detail line in smaller text (grey tone via note)
+                details: List[str] = []
+                if call_id:
+                    details.append(f"id: {call_id[:24]}")
+                if status:
+                    details.append(f"status: {status}")
+                if tool_input:
+                    inp = tool_input[:60] + "..." if len(tool_input) > 60 else tool_input
+                    details.append(f"args: {inp}")
+                if details:
+                    elements.append(note(f"  ┗ {' | '.join(details)}"))
 
         if elapsed_seconds is not None:
             elements.append(divider())

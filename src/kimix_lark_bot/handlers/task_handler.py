@@ -204,16 +204,17 @@ class TaskHandler(BaseHandler):
                 self.ctx.messaging.update_card(prog_mid, progress_card)
 
         def on_tool(tool_name: str, status: str, title: str, **kwargs: Any) -> None:
-            active_tools[tool_name] = {
+            call_id = kwargs.get("tool_call_id", tool_name)
+            active_tools[call_id] = {
+                "call_id": call_id,
                 "name": tool_name,
                 "status": status,
                 "title": title,
                 "error": kwargs.get("error", ""),
+                "input": kwargs.get("tool_info", {}).get("input", ""),
             }
-            # Remove finished tools from active display after a brief window
-            if status in ("completed", "done", "error", "failed"):
-                # Keep finished tool visible for one more update cycle then drop
-                pass
+            # Keep finished tools visible so the user can see the full history.
+            # The card renderer will show them with appropriate icons.
             _update_card()
 
         def on_text(text: str) -> None:

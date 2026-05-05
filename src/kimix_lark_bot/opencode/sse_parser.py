@@ -227,6 +227,12 @@ def _parse_part_updated(data: Dict[str, Any]) -> ParsedEvent:
         tool_name = part.get("tool", "unknown")
         status = state.get("status", "")
         title = state.get("title", tool_name)
+        call_id = part.get("callID", part.get("id", ""))
+        tool_input = ""
+        if isinstance(state.get("input"), dict):
+            tool_input = json.dumps(state["input"], ensure_ascii=False)
+        elif isinstance(state.get("input"), str):
+            tool_input = state["input"]
 
         if tool_name in ("permission", "question", "ask"):
             if status in ("pending", "running"):
@@ -244,6 +250,8 @@ def _parse_part_updated(data: Dict[str, Any]) -> ParsedEvent:
             tool_name=tool_name,
             tool_status=status,
             tool_title=title,
+            tool_call_id=call_id,
+            tool_input=tool_input,
             raw=data,
         )
 
@@ -327,6 +335,12 @@ def _parse_simple_event(
         tool_name = data.get("tool", "")
         status = state.get("status", "")
         title = state.get("title", tool_name)
+        call_id = data.get("callID", data.get("id", ""))
+        tool_input = ""
+        if isinstance(state.get("input"), dict):
+            tool_input = json.dumps(state["input"], ensure_ascii=False)
+        elif isinstance(state.get("input"), str):
+            tool_input = state["input"]
 
         if tool_name in ("permission", "question", "ask"):
             if status in ("pending", "running"):
@@ -344,6 +358,8 @@ def _parse_simple_event(
             tool_name=tool_name,
             tool_status=status,
             tool_title=title,
+            tool_call_id=call_id,
+            tool_input=tool_input,
             raw=data,
         )
 

@@ -55,7 +55,7 @@ class PrinterCallbacks:
 
     on_tool: Optional[Callable[..., None]] = None
     """工具事件回调: fn(tool_name, status, title, **kwargs)
-    kwargs 包含: error, is_done, is_new, tool_info, active_tools
+    kwargs 包含: tool_call_id, error, is_done, is_new, tool_info, active_tools, tool_history
     """
 
     on_text: Optional[Callable[..., None]] = None
@@ -227,7 +227,8 @@ class SSEPrinter:
         self._in_text_block = False
         self._log_fh = None
 
-        # Tool state tracking: merge lifecycle of each tool call
+        # Tool state tracking: keyed by tool_call_id so multiple calls
+        # with the same tool_name (e.g. repeated ReadFile) are kept separate.
         self._tool_registry: Dict[str, Dict[str, Any]] = {}
         self._tool_history: List[Dict[str, Any]] = []
 
@@ -421,29 +422,33 @@ class SSEPrinter:
         tool_name = parsed.tool_name
         status = parsed.tool_status
         title = parsed.tool_title or tool_name
+        call_id = parsed.tool_call_id or tool_name
         error = parsed.raw.get("state", {}).get("error", "") if parsed.raw else ""
+        tool_input = parsed.tool_input or ""
 
-        # Track tool lifecycle: merge start-in-progress-end into one record
-        is_new = tool_name not in self._tool_registry
-        prev_status = self._tool_registry.get(tool_name, {}).get("status", "")
+        # Track tool lifecycle by call_id so repeated tools don't overwrite each other.
+        is_new = call_id not in self._tool_registry
+        prev_status = self._tool_registry.get(call_id, {}).get("status", "")
 
         tool_info = {
+            "call_id": call_id,
             "name": tool_name,
             "status": status,
             "title": title,
             "error": error,
+            "input": tool_input,
             "time": t,
             "updated_at": time.time(),
         }
-        self._tool_registry[tool_name] = tool_info
+        self._tool_registry[call_id] = tool_info
         self.stats.last_tool_name = tool_name
         self.stats.last_tool_status = status
 
         if status in ("completed", "done", "error", "failed"):
             if error and status in ("error", "failed"):
-                self.stats.errors.append(f"{tool_name}: {error}")
+                self.stats.errors.append(f"{tool_name}({call_id}): {error}")
             # Move finished tool from active registry to history
-            finished_tool = self._tool_registry.pop(tool_name)
+            finished_tool = self._tool_registry.pop(call_id)
             self._tool_history.append(finished_tool)
             self.stats.tool_calls.append(finished_tool)
         else:
@@ -466,6 +471,7 @@ class SSEPrinter:
                 f"  {C.GRAY}[{t}]{C.RESET} "
                 f"{icon} {color}{title}{C.RESET}"
                 f" → {color}{status}{C.RESET}"
+                f" {C.DIM}(id={call_id[:20]}){C.RESET}"
             )
             if error:
                 line += f"  {C.RED}err: {_truncate(error, 60)}{C.RESET}"
@@ -478,6 +484,7 @@ class SSEPrinter:
                     tool_name,
                     status,
                     title,
+                    tool_call_id=call_id,
                     error=error,
                     is_done=is_done,
                     is_new=is_new,
