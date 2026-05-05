@@ -54,10 +54,17 @@ class PrinterCallbacks:
     """
 
     on_tool: Optional[Callable[..., None]] = None
-    """工具事件回调: fn(tool_name: str, status: str, content: str)"""
+    """工具事件回调: fn(tool_name, status, title, **kwargs)
+    kwargs 包含: error, is_done, is_new, tool_info, active_tools
+    """
 
     on_text: Optional[Callable[..., None]] = None
     """文本增量回调: fn(delta: str)"""
+
+    on_reasoning: Optional[Callable[..., None]] = None
+    """推理滚动采样回调: fn(total_text: str, delta: str, is_final: bool = False)
+    每 3 秒触发一次，传递累积的 reasoning 文本和本次采样增量。
+    """
 
     on_finish: Optional[Callable[..., None]] = None
     """完成回调: fn(summary: str)"""
@@ -196,6 +203,8 @@ class SSEPrinter:
         on_permission: 权限请求回调 fn(permission_id, raw_data)
     """
 
+    REASONING_FLUSH_INTERVAL: float = 3.0
+
     def __init__(
         self,
         verbose: bool = False,
@@ -205,6 +214,7 @@ class SSEPrinter:
         # Legacy individual callbacks (prefer using `callbacks` dataclass)
         on_tool: Optional[Callable[..., None]] = None,
         on_text: Optional[Callable[..., None]] = None,
+        on_reasoning: Optional[Callable[..., None]] = None,
         on_finish: Optional[Callable[..., None]] = None,
         on_permission: Optional[Callable[..., None]] = None,
     ) -> None:
@@ -217,10 +227,20 @@ class SSEPrinter:
         self._in_text_block = False
         self._log_fh = None
 
+        # Tool state tracking: merge lifecycle of each tool call
+        self._tool_registry: Dict[str, Dict[str, Any]] = {}
+        self._tool_history: List[Dict[str, Any]] = []
+
+        # Reasoning rolling sample buffer
+        self._reasoning_buffer: str = ""
+        self._reasoning_total: str = ""
+        self._last_reasoning_flush: float = 0.0
+
         # External callbacks: prefer PrinterCallbacks, fallback to individual args
         cb = callbacks or PrinterCallbacks()
         self._on_tool = cb.on_tool or on_tool
         self._on_text = cb.on_text or on_text
+        self._on_reasoning = cb.on_reasoning or on_reasoning
         self._on_finish = cb.on_finish or on_finish
         self._on_permission = cb.on_permission or on_permission
 
@@ -232,9 +252,25 @@ class SSEPrinter:
             self._log_raw(f"SSE session started at {datetime.now().isoformat()}")
 
     def close(self) -> None:
+        self._flush_reasoning(is_final=True)
         if self._log_fh:
             self._log_fh.close()
             self._log_fh = None
+
+    def _flush_reasoning(self, is_final: bool = False) -> None:
+        """Flush pending reasoning buffer via callback."""
+        if not self._reasoning_buffer or not self._on_reasoning:
+            return
+        try:
+            self._on_reasoning(
+                self._reasoning_total,
+                delta=self._reasoning_buffer,
+                is_final=is_final,
+            )
+        except Exception:
+            pass
+        self._reasoning_buffer = ""
+        self._last_reasoning_flush = time.time()
 
     # ── 内部输出工具 ──────────────────────────────────────────────
 
@@ -366,6 +402,14 @@ class SSEPrinter:
         if not txt:
             return
         self.stats.reasoning_chars += len(txt)
+
+        # Rolling sample: accumulate into buffer, flush every 3s
+        self._reasoning_buffer += txt
+        self._reasoning_total += txt
+        now = time.time()
+        if now - self._last_reasoning_flush >= self.REASONING_FLUSH_INTERVAL:
+            self._flush_reasoning(is_final=False)
+
         if self.verbose:
             if not self._in_text_block:
                 sys.stdout.write(f"  {C.GRAY}[{t}]{C.RESET} {C.GRAY}💭 reasoning:{C.RESET} ")
@@ -379,11 +423,31 @@ class SSEPrinter:
         title = parsed.tool_title or tool_name
         error = parsed.raw.get("state", {}).get("error", "") if parsed.raw else ""
 
-        self.stats.tool_calls.append(
-            {"name": tool_name, "status": status, "time": t, "error": error}
-        )
+        # Track tool lifecycle: merge start-in-progress-end into one record
+        is_new = tool_name not in self._tool_registry
+        prev_status = self._tool_registry.get(tool_name, {}).get("status", "")
+
+        tool_info = {
+            "name": tool_name,
+            "status": status,
+            "title": title,
+            "error": error,
+            "time": t,
+            "updated_at": time.time(),
+        }
+        self._tool_registry[tool_name] = tool_info
         self.stats.last_tool_name = tool_name
         self.stats.last_tool_status = status
+
+        if status in ("completed", "done", "error", "failed"):
+            if error and status in ("error", "failed"):
+                self.stats.errors.append(f"{tool_name}: {error}")
+            # Move finished tool from active registry to history
+            finished_tool = self._tool_registry.pop(tool_name)
+            self._tool_history.append(finished_tool)
+            self.stats.tool_calls.append(finished_tool)
+        else:
+            self.stats.tool_calls.append(tool_info)
 
         if status == "pending":
             icon, color = "⏳", C.GRAY
@@ -393,23 +457,34 @@ class SSEPrinter:
             icon, color = "✅", C.GREEN
         elif status in ("error", "failed"):
             icon, color = "❌", C.RED
-            if error:
-                self.stats.errors.append(f"{tool_name}: {error}")
         else:
             icon, color = "🔧", C.WHITE
 
-        line = (
-            f"  {C.GRAY}[{t}]{C.RESET} "
-            f"{icon} {color}{title}{C.RESET}"
-            f" → {color}{status}{C.RESET}"
-        )
-        if error:
-            line += f"  {C.RED}err: {_truncate(error, 60)}{C.RESET}"
-        self._print_line(line)
+        # Only print to terminal when status changes to avoid noise
+        if status != prev_status or is_new or self.verbose:
+            line = (
+                f"  {C.GRAY}[{t}]{C.RESET} "
+                f"{icon} {color}{title}{C.RESET}"
+                f" → {color}{status}{C.RESET}"
+            )
+            if error:
+                line += f"  {C.RED}err: {_truncate(error, 60)}{C.RESET}"
+            self._print_line(line)
 
         if self._on_tool:
             try:
-                self._on_tool(tool_name, status, title)
+                is_done = status in ("completed", "done", "error", "failed")
+                self._on_tool(
+                    tool_name,
+                    status,
+                    title,
+                    error=error,
+                    is_done=is_done,
+                    is_new=is_new,
+                    tool_info=tool_info,
+                    active_tools=list(self._tool_registry.values()),
+                    tool_history=self._tool_history,
+                )
             except Exception:
                 pass
 
@@ -454,6 +529,7 @@ class SSEPrinter:
             token_info = f", tokens: {inp}→{out}"
 
         if is_terminal:
+            self._flush_reasoning(is_final=True)
             self._print_line(
                 f"  {C.GRAY}[{t}]{C.RESET} "
                 f"{C.GREEN}{C.BOLD}✅ step-finish{C.RESET} "

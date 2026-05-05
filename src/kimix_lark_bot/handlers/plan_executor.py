@@ -31,17 +31,20 @@ class PlanExecutor(BaseHandler):
 
     def __init__(self, ctx: HandlerContext):
         super().__init__(ctx)
-        from kimix_lark_bot.handlers.command_handlers import HelpHandler, StatusHandler
+        from kimix_lark_bot.handlers.commands.help import HelpHandler
+        from kimix_lark_bot.handlers.commands.status import StatusHandler
         from kimix_lark_bot.handlers.workspace_handlers import (
             StartWorkspaceHandler,
             StopWorkspaceHandler,
             SwitchWorkspaceHandler,
+            WorkspaceDashboardHandler,
         )
         from kimix_lark_bot.handlers.task_handler import TaskHandler
         from kimix_lark_bot.handlers.self_update_handler import SelfUpdateHandler
 
         self._help = HelpHandler(ctx)
         self._status = StatusHandler(ctx)
+        self._dashboard = WorkspaceDashboardHandler(ctx)
         self._start = StartWorkspaceHandler(ctx)
         self._stop = StopWorkspaceHandler(ctx)
         self._switch = SwitchWorkspaceHandler(ctx)
@@ -51,6 +54,7 @@ class PlanExecutor(BaseHandler):
         self._registry: Dict[str, tuple[Callable, str]] = {
             "show_help": (self._exec_help, "显示帮助信息"),
             "show_status": (self._exec_status, "状态已显示"),
+            "show_workspace_dashboard": (self._exec_dashboard, "显示工作区面板"),
             "switch_workspace": (self._exec_switch, "切换工作区"),
             "start_workspace": (self._exec_start, "启动工作区"),
             "stop_workspace": (self._exec_stop, "停止工作区"),
@@ -90,6 +94,11 @@ class PlanExecutor(BaseHandler):
         self, plan: ActionPlan, chat_id: str, mid: str, ctx: ConversationContext
     ) -> None:
         self._status.handle(chat_id, mid, ctx)
+
+    def _exec_dashboard(
+        self, plan: ActionPlan, chat_id: str, mid: str, ctx: ConversationContext
+    ) -> None:
+        self._dashboard.handle(chat_id, mid)
 
     def _exec_switch(
         self, plan: ActionPlan, chat_id: str, mid: str, ctx: ConversationContext

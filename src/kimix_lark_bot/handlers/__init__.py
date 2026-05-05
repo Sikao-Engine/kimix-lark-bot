@@ -23,7 +23,8 @@ from kimix_lark_bot.handlers.base import HandlerContext, BaseHandler
 from kimix_lark_bot.handlers.message_handler import MessageHandler
 from kimix_lark_bot.handlers.card_action import CardActionHandler
 from kimix_lark_bot.handlers.plan_executor import PlanExecutor
-from kimix_lark_bot.handlers.command_handlers import HelpHandler, StatusHandler
+from kimix_lark_bot.handlers.commands.help import HelpHandler
+from kimix_lark_bot.handlers.commands.status import StatusHandler
 from kimix_lark_bot.handlers.workspace_handlers import (
     StartWorkspaceHandler,
     StopWorkspaceHandler,

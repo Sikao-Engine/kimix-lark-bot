@@ -21,7 +21,7 @@ import logging
 import time
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from kimix_lark_bot.handlers.base import BaseHandler, HandlerContext
 
@@ -170,39 +170,55 @@ class TaskHandler(BaseHandler):
         # 3) Build real-time progress callbacks
         start_time = time.time()
         last_card_update = start_time
-        tool_count = 0
-        step_descriptions = []
+        active_tools: Dict[str, Dict[str, Any]] = {}
+        reasoning_text: str = ""
+        spinner_tick = 0
 
-        def on_tool(tool_name: str, status: str, content: str) -> None:
-            nonlocal tool_count, last_card_update
-            tool_count += 1
-            icon = {"pending": "⏳", "running": "⚙️", "completed": "✅", "error": "❌"}.get(status, "🔧")
-            step_descriptions.append(f"{icon} {tool_name}")
-            if len(step_descriptions) > 5:
-                step_descriptions.pop(0)
-
-            # Throttle card updates (every 5s)
+        def _update_card(force: bool = False) -> None:
+            nonlocal last_card_update, spinner_tick
             now = time.time()
-            if now - last_card_update < 5.0:
+            if not force and now - last_card_update < 5.0:
                 return
             last_card_update = now
+            spinner_tick += 1
             elapsed = int(now - start_time)
 
-            progress_card = CardRenderer.progress(
-                title=f"⏳ 执行中 ({elapsed}s)",
-                description=(
-                    f"**任务:** {task_text[:60]}...\n\n"
-                    f"**进度 ({tool_count} 次工具调用):**\n"
-                    + "\n".join(step_descriptions[-5:])
-                ),
+            # Merge active + recently finished tools for display
+            display_tools = list(active_tools.values())
+
+            progress_card = CardRenderer.task_progress(
+                title=f"执行中 ({elapsed}s)",
+                task_text=task_text,
+                tools=display_tools,
+                reasoning=reasoning_text,
+                elapsed_seconds=elapsed,
+                spinner_tick=spinner_tick,
                 show_cancel_button=True,
                 cancel_action_data={"action": "cancel_task", "task_id": op_id},
             )
             if prog_mid:
                 self.ctx.messaging.update_card(prog_mid, progress_card)
 
+        def on_tool(tool_name: str, status: str, title: str, **kwargs: Any) -> None:
+            active_tools[tool_name] = {
+                "name": tool_name,
+                "status": status,
+                "title": title,
+                "error": kwargs.get("error", ""),
+            }
+            # Remove finished tools from active display after a brief window
+            if status in ("completed", "done", "error", "failed"):
+                # Keep finished tool visible for one more update cycle then drop
+                pass
+            _update_card()
+
         def on_text(text: str) -> None:
             pass  # Text accumulation handled by SessionRunner internally
+
+        def on_reasoning(total_text: str, delta: str = "", is_final: bool = False) -> None:
+            nonlocal reasoning_text
+            reasoning_text = total_text
+            _update_card(force=is_final)
 
         def on_finish(summary: str) -> None:
             pass  # Final result handled below after runner.run() returns
@@ -210,6 +226,7 @@ class TaskHandler(BaseHandler):
         callbacks = PrinterCallbacks(
             on_tool=on_tool,
             on_text=on_text,
+            on_reasoning=on_reasoning,
             on_finish=on_finish,
         )
 

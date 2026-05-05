@@ -59,6 +59,130 @@ class CardRenderer:
     # Workspace / Session cards
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Workspace / Session cards
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def workspace_dashboard(
+        projects: List[Dict[str, str]],
+        session_states: Optional[Dict[str, str]] = None,
+        current_workspace: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create an interactive workspace management dashboard.
+
+        Args:
+            projects: List of project dicts with keys: slug, label, path
+            session_states: Optional dict mapping resolved paths to state strings
+            current_workspace: Currently active workspace path
+        """
+        session_states = session_states or {}
+        elements: List[Dict[str, Any]] = [
+            text("📱 **手机端完全按钮化操作**", bold=True),
+            note("点击下方按钮即可管理工作区，无需输入文字"),
+            divider(),
+        ]
+
+        for proj in projects:
+            slug = proj.get("slug", "")
+            label = proj.get("label", slug)
+            path = proj.get("path", "")
+            resolved = str(Path(path).expanduser()) if path else path
+            state = session_states.get(resolved, "idle")
+            icon = get_state_icon(state)
+            state_label = get_state_label(state)
+            is_current = current_workspace == resolved
+
+            # Project info line
+            current_marker = " 👈 当前" if is_current else ""
+            elements.append(text(f"{icon} **{label}** ({slug}){current_marker}"))
+            elements.append(note(f"状态: {state_label}"))
+
+            # Action buttons based on state
+            buttons: List[Dict[str, Any]] = []
+            if state in ("idle", "error"):
+                buttons.append(
+                    button(
+                        "🚀 启动",
+                        "callback",
+                        {"action": "btn_start_workspace", "path": resolved},
+                        ButtonStyle.PRIMARY,
+                    )
+                )
+            elif state == "running":
+                if not is_current:
+                    buttons.append(
+                        button(
+                            "🔀 切换",
+                            "callback",
+                            {"action": "btn_switch_workspace", "path": resolved},
+                            ButtonStyle.PRIMARY,
+                        )
+                    )
+                else:
+                    buttons.append(
+                        button(
+                            "💻 当前",
+                            "callback",
+                            {"action": "btn_show_dashboard"},
+                            ButtonStyle.DEFAULT,
+                        )
+                    )
+                buttons.append(
+                    button(
+                        "⏹️ 停止",
+                        "callback",
+                        {"action": "btn_stop_workspace", "path": resolved},
+                        ButtonStyle.DANGER,
+                    )
+                )
+            elif state == "starting":
+                buttons.append(
+                    button(
+                        "⏳ 启动中...",
+                        "callback",
+                        {"action": "btn_show_dashboard"},
+                        ButtonStyle.DEFAULT,
+                    )
+                )
+
+            if buttons:
+                elements.append(action_row(buttons))
+            elements.append(divider())
+
+        # Global actions
+        global_buttons: List[Dict[str, Any]] = [
+            button(
+                "🔄 刷新状态",
+                "callback",
+                {"action": "btn_refresh_dashboard"},
+                ButtonStyle.DEFAULT,
+            ),
+        ]
+
+        # Check if any process is running
+        has_running = any(
+            session_states.get(p.get("path", ""), "idle") == "running" for p in projects
+        )
+        if has_running:
+            global_buttons.append(
+                button(
+                    "🛑 停止全部",
+                    "callback",
+                    {"action": "btn_stop_all"},
+                    ButtonStyle.DANGER,
+                )
+            )
+
+        elements.append(action_row(global_buttons))
+        elements.append(note("💡 也可直接发送文字指令，如：启动 sailzen / 停止 / 状态"))
+
+        return card(
+            elements=elements,
+            title="🖥 工作区管理面板",
+            color=CardColor.BLUE,
+        )
+
     @staticmethod
     def workspace_selection(
         projects: List[Dict[str, str]],
@@ -255,6 +379,95 @@ class CardRenderer:
 
         if elapsed_seconds is not None:
             elements.append(note(f"已用时 {int(elapsed_seconds)}s"))
+
+        if show_cancel_button:
+            elements.append(divider())
+            if cancel_action_data:
+                elements.append(
+                    action_row(
+                        [
+                            button(
+                                "❌ 取消任务",
+                                "callback",
+                                cancel_action_data,
+                                ButtonStyle.DANGER,
+                            )
+                        ]
+                    )
+                )
+            else:
+                elements.append(note("💡 发送「取消」可中断当前任务"))
+
+        return card(
+            elements=elements,
+            title=f"⏳ {title}",
+            color=CardColor.BLUE,
+        )
+
+    @staticmethod
+    def task_progress(
+        title: str,
+        task_text: str = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        reasoning: str = "",
+        elapsed_seconds: Optional[float] = None,
+        spinner_tick: int = 0,
+        show_cancel_button: bool = False,
+        cancel_action_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create a detailed task progress card with reasoning and tool calls.
+
+        Args:
+            title: Progress title
+            task_text: Original task description
+            tools: List of tool call dicts with keys: name, status, title, error
+            reasoning: Current reasoning text (rolling sampled)
+            elapsed_seconds: Optional elapsed time
+            spinner_tick: Spinner animation frame index
+            show_cancel_button: Whether to show cancel button
+            cancel_action_data: Callback data for cancel button
+        """
+        spinner = _SPINNER_CHARS[spinner_tick % len(_SPINNER_CHARS)]
+        _tool_icons = {
+            "pending": "⏳",
+            "running": "⚙️",
+            "completed": "✅",
+            "done": "✅",
+            "error": "❌",
+            "failed": "❌",
+        }
+
+        elements: List[Dict[str, Any]] = []
+
+        if task_text:
+            display_task = task_text[:120] + ("..." if len(task_text) > 120 else "")
+            elements.append(text(f"📝 **任务:** {display_task}"))
+
+        if reasoning:
+            elements.append(divider())
+            elements.append(text(f"{spinner} **思考中...**", bold=True))
+            # Show last 300 chars of reasoning to keep card compact
+            display_reasoning = reasoning[-300:]
+            if len(reasoning) > 300:
+                display_reasoning = "..." + display_reasoning
+            elements.append(note(display_reasoning))
+
+        if tools:
+            elements.append(divider())
+            elements.append(text("🔧 **工具调用**", bold=True))
+            for tc in tools:
+                name = tc.get("title") or tc.get("name", "unknown")
+                status = tc.get("status", "unknown")
+                icon = _tool_icons.get(status, "🔧")
+                error = tc.get("error", "")
+                line = f"{icon} {name} → {status}"
+                if error:
+                    line += f" (err: {error[:40]})"
+                elements.append(note(line))
+
+        if elapsed_seconds is not None:
+            elements.append(divider())
+            elements.append(note(f"⏱️ 已用时 {int(elapsed_seconds)}s"))
 
         if show_cancel_button:
             elements.append(divider())

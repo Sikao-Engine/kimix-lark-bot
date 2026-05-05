@@ -1,41 +1,10 @@
-# -*- coding: utf-8 -*-
-# @file command_handlers.py
-# @brief Simple command handlers (help, status)
-# @author sailing-innocent
-# @date 2026-04-06
-# @version 1.0
-# ---------------------------------
-"""Command handlers for simple bot commands.
-
-This module handles commands like:
-- show_help: Display help information
-- show_status: Display system status
-"""
-
-from pathlib import Path
-from typing import Optional
-
 from kimix_lark_bot.handlers.base import BaseHandler, HandlerContext
 from kimix_lark_bot.context import ConversationContext
 from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
 from kimix_lark_bot.task_logger import task_logger
 from kimix_lark_bot.opencode import check_health_sync
-
-
-class HelpHandler(BaseHandler):
-    """Handler for help command."""
-
-    def handle(self, chat_id: str, message_id: str) -> None:
-        """Send help information."""
-        print("Handling help command")
-        help_card = CardRenderer.help(
-            commands=[
-                ("启动 <项目>", "启动工作区", "启动 sz"),
-                ("停止", "停止工作区", "停止 sz"),
-            ],
-            projects=self.ctx.config.projects,
-        )
-        self.ctx.messaging.reply_card(message_id, help_card, "help")
+from pathlib import Path
+from typing import Optional
 
 
 class StatusHandler(BaseHandler):

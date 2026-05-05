@@ -131,5 +131,5 @@ def create_default_config(config_path: str) -> None:
         f.write("\n")
         f.write(yaml_body)
         f.write(footer)
-    print(f"Created config: {config_path}")
-    print("Please edit and add your Feishu credentials.")
+    logger.info(f"Created config: {config_path}")
+    logger.info("Please edit and add your Feishu credentials.")
