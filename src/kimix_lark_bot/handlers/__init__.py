@@ -3,7 +3,7 @@
 # @brief Handlers package initialization
 # @author sailing-innocent
 # @date 2026-04-06
-# @version 1.0
+# @version 2.0
 # ---------------------------------
 """Message and command handlers for Feishu Bot.
 
