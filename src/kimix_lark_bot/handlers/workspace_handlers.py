@@ -305,7 +305,6 @@ class WorkspaceDashboardHandler(BaseHandler):
             chat_id: Target chat ID
             message_id: Optional message ID to reply to (if None, sends new message)
         """
-        self.ctx.reload_config()
         # Build session state map
         session_states: Dict[str, str] = {}
         proc_map = {p.path: p for p in self.ctx.process_mgr.list_processes()}
@@ -327,6 +326,7 @@ class WorkspaceDashboardHandler(BaseHandler):
         # Get current workspace from context
         ctx = self.ctx.get_or_create_context(chat_id)
         current_workspace = ctx.active_workspace
+        print(f"Current workspace for chat {chat_id}: {current_workspace}")
 
         # Build dynamic hint from registry
         text_hint = self._build_text_hint()

@@ -99,6 +99,19 @@ class CardActionHandler(BaseHandler):
             if action_type == "new_session":
                 return self._handle_new_session(value, chat_id, message_id)
 
+            # Handle workspace button actions
+            if action_type in (
+                "btn_start_workspace",
+                "btn_stop_workspace",
+                "btn_switch_workspace",
+                "btn_show_dashboard",
+                "btn_refresh_dashboard",
+                "btn_stop_all",
+            ):
+                return self._handle_workspace_button(
+                    action_type, value, chat_id, message_id
+                )
+
             # Route other actions to background execution
             return self._route_to_background(action_type, path, chat_id, message_id)
 
@@ -395,7 +408,10 @@ class CardActionHandler(BaseHandler):
                     "toast": {
                         "type": "error",
                         "content": "缺少会话信息",
-                        "i18n": {"zh_cn": "缺少会话信息", "en_us": "Missing session info"},
+                        "i18n": {
+                            "zh_cn": "缺少会话信息",
+                            "en_us": "Missing session info",
+                        },
                     }
                 }
             )
@@ -441,7 +457,10 @@ class CardActionHandler(BaseHandler):
                 "toast": {
                     "type": "info",
                     "content": "正在清空对话...",
-                    "i18n": {"zh_cn": "正在清空对话...", "en_us": "Clearing session..."},
+                    "i18n": {
+                        "zh_cn": "正在清空对话...",
+                        "en_us": "Clearing session...",
+                    },
                 }
             }
         )
@@ -457,7 +476,10 @@ class CardActionHandler(BaseHandler):
                     "toast": {
                         "type": "error",
                         "content": "缺少会话信息",
-                        "i18n": {"zh_cn": "缺少会话信息", "en_us": "Missing session info"},
+                        "i18n": {
+                            "zh_cn": "缺少会话信息",
+                            "en_us": "Missing session info",
+                        },
                     }
                 }
             )
@@ -508,7 +530,119 @@ class CardActionHandler(BaseHandler):
                 "toast": {
                     "type": "info",
                     "content": "正在创建新对话...",
-                    "i18n": {"zh_cn": "正在创建新对话...", "en_us": "Creating new session..."},
+                    "i18n": {
+                        "zh_cn": "正在创建新对话...",
+                        "en_us": "Creating new session...",
+                    },
+                }
+            }
+        )
+
+    def _handle_workspace_button(
+        self, action_type: str, value: dict, chat_id: str, message_id: str
+    ) -> Any:
+        """Handle workspace dashboard button clicks.
+
+        These actions are processed in background threads to meet the 3s
+        response requirement for card actions.
+        """
+        path = value.get("path") if isinstance(value, dict) else None
+        ctx = self.ctx.get_or_create_context(chat_id)
+
+        def execute() -> None:
+            try:
+                if action_type == "btn_show_dashboard":
+                    from kimix_lark_bot.handlers.workspace_handlers import (
+                        WorkspaceDashboardHandler,
+                    )
+
+                    handler = WorkspaceDashboardHandler(self.ctx)
+                    handler.handle(chat_id, message_id)
+
+                elif action_type == "btn_refresh_dashboard":
+                    from kimix_lark_bot.handlers.workspace_handlers import (
+                        WorkspaceDashboardHandler,
+                    )
+
+                    handler = WorkspaceDashboardHandler(self.ctx)
+                    handler.refresh(chat_id, message_id, ctx)
+
+                elif action_type == "btn_start_workspace":
+                    if path:
+                        from kimix_lark_bot.handlers.workspace_handlers import (
+                            StartWorkspaceHandler,
+                        )
+
+                        handler = StartWorkspaceHandler(self.ctx)
+                        handler.handle(chat_id, message_id, ctx, path=path)
+                    else:
+                        self.ctx.messaging.reply_text(message_id, "❌ 未指定工作区路径")
+
+                elif action_type == "btn_stop_workspace":
+                    if path:
+                        from kimix_lark_bot.handlers.workspace_handlers import (
+                            StopWorkspaceHandler,
+                        )
+
+                        handler = StopWorkspaceHandler(self.ctx)
+                        handler.handle(chat_id, message_id, ctx, path=path)
+                    else:
+                        # Stop all
+                        from kimix_lark_bot.handlers.workspace_handlers import (
+                            StopWorkspaceHandler,
+                        )
+
+                        handler = StopWorkspaceHandler(self.ctx)
+                        handler.handle(chat_id, message_id, ctx)
+
+                elif action_type == "btn_stop_all":
+                    from kimix_lark_bot.handlers.workspace_handlers import (
+                        StopWorkspaceHandler,
+                    )
+
+                    handler = StopWorkspaceHandler(self.ctx)
+                    handler.handle(chat_id, message_id, ctx)
+
+                elif action_type == "btn_switch_workspace":
+                    if path:
+                        from kimix_lark_bot.handlers.workspace_handlers import (
+                            SwitchWorkspaceHandler,
+                        )
+
+                        handler = SwitchWorkspaceHandler(self.ctx)
+                        handler.handle(chat_id, message_id, ctx, path=path)
+                    else:
+                        self.ctx.messaging.reply_text(message_id, "❌ 未指定工作区路径")
+
+            except Exception as exc:
+                print(f"[CardActionHandler] Workspace button error: {exc}")
+                traceback.print_exc()
+                error_card = CardRenderer.error(
+                    "操作失败", f"执行操作时出错: {str(exc)}"
+                )
+                self.ctx.messaging.update_card(message_id, error_card)
+
+        threading.Thread(target=execute, daemon=True).start()
+
+        # Return immediate toast response
+        toast_messages = {
+            "btn_start_workspace": "正在启动工作区...",
+            "btn_stop_workspace": "正在停止工作区...",
+            "btn_switch_workspace": "正在切换工作区...",
+            "btn_show_dashboard": "正在打开面板...",
+            "btn_refresh_dashboard": "正在刷新...",
+            "btn_stop_all": "正在停止全部工作区...",
+        }
+
+        return P2CardActionTriggerResponse(
+            {
+                "toast": {
+                    "type": "info",
+                    "content": toast_messages.get(action_type, "处理中..."),
+                    "i18n": {
+                        "zh_cn": toast_messages.get(action_type, "处理中..."),
+                        "en_us": "Processing...",
+                    },
                 }
             }
         )
