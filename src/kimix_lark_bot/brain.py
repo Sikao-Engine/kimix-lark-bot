@@ -19,16 +19,6 @@ import json
 import os
 import time
 import ast
-
-# FIX: Move imports to top level
-from kimix_lark_bot.llm.gateway import LLMGateway, LLMExecutionConfig
-from kimix_lark_bot.llm.providers import ProviderConfig
-from kimix_lark_bot.llm.available_providers import (
-    DEFAULT_LLM_PROVIDER,
-    DEFAULT_LLM_MODEL,
-    DEFAULT_LLM_CONFIG,
-)
-
 from kimix_lark_bot.context import (
     ConversationContext,
     ActionPlan,
@@ -55,101 +45,9 @@ _CONFIRM_WORDS = {
 _CANCEL_WORDS = {"否", "不是", "取消", "不", "n", "no", "算了", "别", "不要", "拒绝"}
 
 
-def _make_gateway(
-    config_provider: Optional[str] = None, config_api_key: Optional[str] = None
-):
-    """Build a minimal LLMGateway from environment variables or config.
-
-    Args:
-        config_provider: Optional provider name from config file (e.g., "moonshot")
-        config_api_key: Optional API key from config file
-    """
-    try:
-        provider_env_keys = {
-            "moonshot": "MOONSHOT_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "google": "GOOGLE_API_KEY",
-            "deepseek": "DEEPSEEK_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-        }
-
-        # Default models for each provider
-        default_models = {
-            "moonshot": DEFAULT_LLM_MODEL
-            if DEFAULT_LLM_PROVIDER == "moonshot"
-            else "kimi-k2.5",
-            "openai": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-            "google": os.environ.get("GOOGLE_MODEL", "gemini-2.0-flash"),
-            "deepseek": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
-            "anthropic": os.environ.get("ANTHROPIC_MODEL", "claude-3-haiku-20240307"),
-        }
-
-        gw = LLMGateway()
-        registered = []
-
-        # First, check if config file has explicit provider + api_key
-        if config_provider and config_api_key:
-            provider = config_provider.lower()
-            if provider in provider_env_keys:
-                model = default_models.get(provider, "")
-                cfg = ProviderConfig(
-                    provider_name=provider,
-                    model=model,
-                    api_key=config_api_key,
-                    api_base=os.environ.get(f"{provider.upper()}_API_BASE"),
-                )
-                gw.register_provider(provider, cfg)
-                registered.append(provider)
-                print(f"[BotBrain] Registered provider from config: {provider}")
-
-        # Then check environment variables for other providers
-        for pname, env_key in provider_env_keys.items():
-            if pname in registered:
-                continue  # Skip if already registered from config
-            key = os.environ.get(env_key, "")
-            if key:
-                cfg = ProviderConfig(
-                    provider_name=pname,
-                    model=default_models[pname],
-                    api_key=key,
-                    api_base=os.environ.get(f"{pname.upper()}_API_BASE"),
-                )
-                gw.register_provider(pname, cfg)
-                registered.append(pname)
-
-        if not registered:
-            return None, None, None
-        primary = (
-            DEFAULT_LLM_PROVIDER
-            if DEFAULT_LLM_PROVIDER in registered
-            else registered[0]
-        )
-        model = default_models.get(primary, "")
-        temp = float(DEFAULT_LLM_CONFIG.get("temperature", 0.7))
-        return gw, primary, (model, temp)
-
-    except Exception as exc:
-        print(f"[BotBrain] Gateway init failed: {exc}")
-        return None, None, None
-
-
 # ---------------------------------------------------------------------------
 # LLM-driven brain
 # ---------------------------------------------------------------------------
-
-_BRAIN_SYSTEM = """你是飞书机器人，帮用户控制Agent开发环境。理解自然语言（可能有错别字），返回JSON行动计划。
-
-上下文：mode={mode}, workspace={active_workspace}, projects={projects}
-历史：{history}
-
-用户：{user_text}
-
-返回JSON：
-{{"action":"...","params":{{}},"confirm_required":false,"confirm_summary":"","reply":"","reasoning":""}}
-
-actions: start_workspace|stop_workspace|send_task|show_status|show_help|chat|clarify
-规则：stop_workspace需确认；长消息或破坏性操作需确认
-注意：推断用户意图，只返回JSON"""
 
 _BRAIN_FALLBACK_ACTIONS = {
     "帮助": ("show_help", {}),
@@ -220,18 +118,8 @@ class BotBrain:
     def __init__(
         self,
         projects: List[Dict[str, str]],
-        llm_provider: Optional[str] = None,
-        llm_api_key: Optional[str] = None,
     ):
         self.projects = projects
-        self._gw, self._provider, self._model_cfg = _make_gateway(
-            llm_provider, llm_api_key
-        )
-        if self._gw:
-            m, _ = self._model_cfg
-            print(f"[BotBrain] LLM ready: {self._provider}/{m}")
-        else:
-            print("[BotBrain] No LLM API key found — keyword-only mode")
 
     def think(self, text: str, ctx: ConversationContext) -> ActionPlan:
         """Main entry: text + context → ActionPlan.
@@ -317,102 +205,6 @@ class BotBrain:
             return False
         return None
 
-    async def _think_llm(
-        self,
-        text: str,
-        ctx: ConversationContext,
-        chat_id: Optional[str] = None,
-        max_retries: int = 2,
-    ) -> ActionPlan:
-        # FIX: Import moved to top level
-        start_time = time.time()
-        slugs = [p.get("slug", p.get("label", "")) for p in self.projects]
-        prompt = _BRAIN_SYSTEM.format(
-            mode=ctx.mode,
-            active_workspace=ctx.active_workspace or "None",
-            projects=", ".join(slugs) if slugs else "None",
-            history=ctx.history_text() or "(无历史)",
-            user_text=text,
-        )
-
-        # Log the prompt for debugging
-        chat_prefix = f"[{chat_id}] " if chat_id else ""
-        print(f"\n{'=' * 60}")
-        print(f"{chat_prefix}[LLM] Prompt ({len(prompt)} chars):")
-        print(f"{prompt[:500]}{'...' if len(prompt) > 500 else ''}")
-        print(f"{'=' * 60}")
-
-        model, temp = self._model_cfg
-        config = LLMExecutionConfig(
-            provider=self._provider,
-            model=model,
-            temperature=temp,
-            max_tokens=512,
-            enable_caching=False,
-            timeout=30,  # 设置30秒超时，避免长时间等待
-        )
-
-        last_error = None
-        # 重试循环
-        for attempt in range(max_retries + 1):
-            try:
-                result = await self._gw.execute(prompt, config)
-                raw = result.content.strip()
-                elapsed = time.time() - start_time
-
-                # 检查空响应
-                if not raw:
-                    print(
-                        f"{chat_prefix}[LLM] WARNING: Empty response (attempt {attempt + 1}/{max_retries + 1})"
-                    )
-                    if attempt < max_retries:
-                        print(f"{chat_prefix}[LLM] Retrying in 1s...")
-                        await asyncio.sleep(1)
-                        continue
-                    else:
-                        # 所有重试后仍空，优雅降级
-                        return ActionPlan(action="chat")
-
-                # Log the raw response
-                print(
-                    f"{chat_prefix}[LLM] Response ({elapsed:.2f}s, {len(raw)} chars, attempt {attempt + 1}):"
-                )
-                print(f"{raw[:800]}{'...' if len(raw) > 800 else ''}")
-
-                # Clean up markdown code blocks
-                raw_cleaned = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw_cleaned = re.sub(r"\s*```$", "", raw_cleaned)
-
-                data = self._parse_llm_json(raw_cleaned, chat_id=chat_id)
-
-                action = data.get("action", "chat")
-                print(f"{chat_prefix}[LLM] Parsed action: {action}")
-
-                return ActionPlan(
-                    action=action,
-                    params=data.get("params", {}),
-                    confirm_required=bool(data.get("confirm_required", False)),
-                    confirm_summary=data.get("confirm_summary", ""),
-                    reply=data.get("reply", ""),
-                )
-
-            except Exception as exc:
-                elapsed = time.time() - start_time
-                last_error = exc
-                if attempt < max_retries:
-                    print(
-                        f"{chat_prefix}[LLM] Attempt {attempt + 1} failed after {elapsed:.2f}s: {exc}"
-                    )
-                    print(f"{chat_prefix}[LLM] Retrying...")
-                    await asyncio.sleep(1)
-                    continue
-                else:
-                    print(
-                        f"{chat_prefix}[LLM] All {max_retries + 1} attempts failed after {elapsed:.2f}s"
-                    )
-                    # 不抛出异常，返回 chat action 让上层优雅降级
-                    return ActionPlan(action="chat")
-
     async def think_with_feedback(
         self,
         text: str,
@@ -450,18 +242,9 @@ class BotBrain:
             thinking_mid = None
 
         try:
-            if self._gw:
-                plan = await self._think_llm(text, ctx, chat_id=chat_id)
-                if plan.action != "chat":
-                    print(f"[BotBrain] Level 2 matched (LLM): {plan.action}")
-                    return plan, thinking_mid
-                # LLM 返回 chat，说明它也没理解
-                print(f"[BotBrain] Level 2 (LLM) returned chat, falling back")
-
             # 没有 LLM 或 LLM 也没理解，优雅降级
             plan = self._create_fallback_plan(text, ctx)
             return plan, thinking_mid
-
         except Exception as exc:
             print(f"[{chat_id}] LLM failed: {exc}")
             # 更新 thinking card 显示降级
