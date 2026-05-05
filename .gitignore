@@ -5,3 +5,4 @@ __pycache__/
 data/*
 sse_log_*
 *.bot.yaml
+.kimix_cache
