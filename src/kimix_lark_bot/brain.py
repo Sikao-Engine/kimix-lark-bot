@@ -3,16 +3,19 @@
 # @brief Bot brain with LLM intent recognition
 # @author sailing-innocent
 # @date 2026-04-06
-# @version 1.1
+# @version 2.0
 # ---------------------------------
 """Bot brain with LLM-driven intent recognition.
 
 This module provides the BotBrain class for converting user text
 into structured ActionPlan objects using LLM or deterministic matching.
+
+v2.0: Keyword maps are built dynamically from CommandRegistry so that
+new commands automatically participate in deterministic matching.
 """
 
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 from kimix_lark_bot.context import (
     ConversationContext,
     ActionPlan,
@@ -41,67 +44,6 @@ _CONFIRM_WORDS = {
 _CANCEL_WORDS = {"否", "不是", "取消", "不", "n", "no", "算了", "别", "不要", "拒绝"}
 
 
-# ---------------------------------------------------------------------------
-# LLM-driven brain
-# ---------------------------------------------------------------------------
-
-_BRAIN_FALLBACK_ACTIONS = {
-    "帮助": ("show_help", {}),
-    "help": ("show_help", {}),
-    "状态": ("show_status", {}),
-    "status": ("show_status", {}),
-    # Phase 0: Self-update commands
-    "更新": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested update"},
-    ),
-    "更新bot": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested bot update"},
-    ),
-    "更新 bots": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested bot update"},
-    ),
-    "update": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested update"},
-    ),
-    "update bot": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested bot update"},
-    ),
-    "升级": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested upgrade"},
-    ),
-    "升级bot": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested bot upgrade"},
-    ),
-    "restart": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested restart"},
-    ),
-    "restart bot": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested bot restart"},
-    ),
-    "重启": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested restart"},
-    ),
-    "重启bot": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested bot restart"},
-    ),
-    "自更新": (
-        "self_update",
-        {"trigger_source": "manual", "reason": "User requested self-update"},
-    ),
-}
-
-
 class BotBrain:
     """LLM-driven intent recognizer for the Feishu bot.
 
@@ -116,6 +58,12 @@ class BotBrain:
         projects: List[Dict[str, str]],
     ):
         self.projects = projects
+        # Dynamic keyword maps from the central registry
+        from kimix_lark_bot.commands import get_registry
+
+        self._registry = get_registry()
+        self._exact_map = self._registry.build_exact_keyword_map()
+        self._fuzzy_map = self._registry.build_fuzzy_keyword_map()
 
     def think(self, text: str, ctx: ConversationContext) -> ActionPlan:
         """Main entry: text + context → ActionPlan.
@@ -146,7 +94,7 @@ class BotBrain:
         message_id: str,
         agent: "FeishuBotAgent",  # noqa: F821
         use_thinking_card: bool = True,
-    ) -> Tuple[ActionPlan, Optional[str]]:
+    ) -> tuple[ActionPlan, Optional[str]]:
         """Think with UX feedback - returns (ActionPlan, thinking_card_message_id or None).
 
         渐进式识别流程:
@@ -178,15 +126,26 @@ class BotBrain:
                 params={"task": text, "path": ctx.active_workspace},
             )
 
+        # Build hint from registry so examples stay in sync
+        registry = self._registry
+        start_kw = "启动"
+        start_entry = registry.get("start_workspace")
+        if start_entry and start_entry.fuzzy_keywords:
+            start_kw = start_entry.fuzzy_keywords[0]
+        status_kw = "状态"
+        status_entry = registry.get("show_status")
+        if status_entry and status_entry.exact_keywords:
+            status_kw = status_entry.exact_keywords[0]
+
         return ActionPlan(
             action="chat",
             reply=(
-                "我可以帮你控制 Agent 开发环境。试试这些指令：\n"
-                "• 打开 sailzen\n"
-                "• 启动 ~/projects/myapp\n"
-                "• 查看状态\n"
-                "• 帮我写代码...\n\n"
-                "或者直接描述你需要做什么。"
+                f"我可以帮你控制 Agent 开发环境。试试这些指令：\n"
+                f"• {start_kw} sailzen\n"
+                f"• {start_kw} ~/projects/myapp\n"
+                f"• {status_kw}\n"
+                f"• 帮我写代码...\n\n"
+                f"或者直接描述你需要做什么。"
             ),
         )
 
@@ -232,47 +191,23 @@ class BotBrain:
                 cmd_text = text.lstrip("!！").strip()
                 cmd_lower = cmd_text.lower()
 
-                # 在感叹号模式下，解析控制指令
-                # 完全匹配精确指令
-                for kw, (action, params) in _BRAIN_FALLBACK_ACTIONS.items():
+                # 1) 精确匹配
+                for kw, action in self._exact_map.items():
                     if cmd_lower == kw:
-                        return ActionPlan(action=action, params=params)
+                        return ActionPlan(action=action, params={})
 
-                # 状态查询指令（!状态 或 !status）
-                if cmd_lower in ["状态", "status", "s"]:
-                    return ActionPlan(action="show_status", params={})
+                # 2) 模糊匹配（包含关键词）+ path 提取
+                for kw, action in self._fuzzy_map.items():
+                    if kw in cmd_lower:
+                        plan = self._build_plan_for_action(action, cmd_text)
+                        if plan:
+                            return plan
 
-                # 解析工作区控制指令（启动、停止、切换等）
-                if any(
-                    k in cmd_lower for k in ["启动", "打开", "开启", "start", "open"]
-                ):
-                    path = extract_path_from_text(cmd_text, self.projects)
-                    return ActionPlan(action="start_workspace", params={"path": path})
-
-                if any(
-                    k in cmd_lower for k in ["停止", "关闭", "结束", "stop", "kill"]
-                ):
-                    path = extract_path_from_text(cmd_text, self.projects)
-                    return ActionPlan(
-                        action="stop_workspace",
-                        params={"path": path},
-                        confirm_required=True,
-                        confirm_summary=f"停止 {'所有会话' if not path else path}",
-                    )
-
-                if any(
-                    k in cmd_lower for k in ["切换", "使用", "进入", "switch", "use"]
-                ):
-                    path = extract_path_from_text(cmd_text, self.projects)
-                    if path:
-                        return ActionPlan(
-                            action="switch_workspace", params={"path": path}
-                        )
-
-                # 感叹号开头但不认识的指令 -> 提示用户
+                # 不认识的指令 -> 提示用户
+                available = self._build_available_commands_hint()
                 return ActionPlan(
                     action="chat",
-                    reply=f"未知的控制指令: {cmd_text}\n\n可用的控制指令:\n• !状态 / !status / !s - 查看当前状态\n• !启动 <项目> - 启动工作区\n• !停止 - 停止工作区\n• !切换 <项目> - 切换工作区\n• !帮助 / !help - 显示帮助",
+                    reply=f"未知的控制指令: {cmd_text}\n\n可用的控制指令:\n{available}",
                 )
 
             # 非感叹号开头的消息 -> 直接转发给Agent
@@ -281,35 +216,59 @@ class BotBrain:
             )
 
         # === 状态1：不在工作区（idle）===
-        # Level 1: 精确匹配（完全匹配，无歧义）
-        for kw, (action, params) in _BRAIN_FALLBACK_ACTIONS.items():
+        # Level 1: 精确匹配
+        for kw, action in self._exact_map.items():
             if t == kw:
-                return ActionPlan(action=action, params=params)
+                return ActionPlan(action=action, params={})
 
-        # 启动指令（进入coding模式）
-        if any(k in t for k in ["start", "启动", "开启", "打开", "open"]):
-            path = extract_path_from_text(text, self.projects)
-            if path:
-                return ActionPlan(action="start_workspace", params={"path": path})
-
-        # 停止指令
-        if any(k in t for k in ["stop", "停止", "关闭", "结束", "kill"]):
-            path = extract_path_from_text(text, self.projects)
-            return ActionPlan(
-                action="stop_workspace",
-                params={"path": path},
-                confirm_required=True,
-                confirm_summary=f"停止 {'所有会话' if not path else path}",
-            )
-
-        # 切换工作区指令
-        if any(
-            k in t
-            for k in ["使用", "进入", "切换到", "切到", "use", "switch to", "enter"]
-        ):
-            path = extract_path_from_text(text, self.projects)
-            if path:
-                return ActionPlan(action="switch_workspace", params={"path": path})
+        # Level 1: 模糊匹配 + path 提取
+        for kw, action in self._fuzzy_map.items():
+            if kw in t:
+                plan = self._build_plan_for_action(action, text)
+                if plan:
+                    return plan
 
         # 返回 chat action 表示需要 LLM 处理（Level 2）
         return ActionPlan(action="chat")
+
+    def _build_plan_for_action(self, action: str, text: str) -> Optional[ActionPlan]:
+        """Build an ActionPlan for a fuzzy-matched action.
+
+        Handles path extraction and special per-action rules (confirm, etc.).
+        Returns None when the match should be skipped (e.g. switch without path).
+        """
+        entry = self._registry.get(action)
+        path = extract_path_from_text(text, self.projects)
+        params: Dict[str, Any] = {}
+        if path:
+            params["path"] = path
+
+        # switch_workspace requires a path
+        if action == "switch_workspace" and not path:
+            return None
+
+        plan = ActionPlan(action=action, params=params)
+
+        # stop_workspace always needs confirmation
+        if action == "stop_workspace":
+            plan.confirm_required = True
+            plan.confirm_summary = f"停止 {'所有会话' if not path else path}"
+
+        # self_update confirmations are handled by the handler itself,
+        # but we can flag it here if the registry says so.
+        if entry and entry.confirm_required and action != "stop_workspace":
+            plan.confirm_required = True
+            plan.confirm_summary = entry.confirm_summary_template or f"确认执行 {entry.title}"
+
+        return plan
+
+    def _build_available_commands_hint(self) -> str:
+        """Build a bullet list of visible commands for unknown-command replies."""
+        lines: List[str] = []
+        for entry in self._registry.list_visible():
+            kws = entry.exact_keywords or entry.fuzzy_keywords[:2]
+            if not kws:
+                continue
+            prefix = "!"
+            lines.append(f"• {prefix}{kws[0]} - {entry.description}")
+        return "\n".join(lines)

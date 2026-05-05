@@ -3,6 +3,7 @@ from kimix_lark_bot.context import ConversationContext
 from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
 from kimix_lark_bot.task_logger import task_logger
 from kimix_lark_bot.opencode import check_health_sync
+from kimix_lark_bot.commands import get_registry
 from pathlib import Path
 from typing import Optional
 
@@ -72,8 +73,13 @@ class StatusHandler(BaseHandler):
 
         if not procs:
             status_lines.append("❌ 没有运行中的工作区")
+            registry = get_registry()
+            start_entry = registry.get("start_workspace")
+            start_kw = "启动"
+            if start_entry and start_entry.fuzzy_keywords:
+                start_kw = start_entry.fuzzy_keywords[0]
             status_lines.append(
-                "💡 使用 `!启动 <项目名>` 或 `启动 <项目名>` 开启工作区"
+                f"💡 使用 `!{start_kw} <项目名>` 或 `{start_kw} <项目名>` 开启工作区"
             )
         else:
             for proc in procs:
@@ -120,12 +126,18 @@ class StatusHandler(BaseHandler):
                 status_lines.append(f"{run_icon} {label} (`{slug}`)")
             status_lines.append("")
 
-        # 4. Quick commands hint
+        # 4. Quick commands hint — dynamically synced from CommandRegistry
         status_lines.append("💡 **快捷指令**")
-        status_lines.append("• `!状态` - 刷新此状态")
-        status_lines.append("• `!启动 <项目>` - 启动工作区")
-        status_lines.append("• `!停止` - 停止当前工作区")
-        status_lines.append("• `!切换 <项目>` - 切换到其他工作区")
+        registry = get_registry()
+        for entry in registry.list_visible():
+            kw = ""
+            if entry.exact_keywords:
+                kw = entry.exact_keywords[0]
+            elif entry.fuzzy_keywords:
+                kw = entry.fuzzy_keywords[0]
+            if kw and entry.category in ("工作区", "信息"):
+                fmt = entry.format_hint or kw
+                status_lines.append(f"• `!{fmt}` - {entry.description}")
 
         # Send status card
         full_status = "\n".join(status_lines)

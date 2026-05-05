@@ -309,7 +309,10 @@ class FeishuBotAgent:
         )
 
         logger.info("Connecting to Feishu (long connection)...")
-        logger.info("Send '帮助' in Feishu to see available commands.")
+        from kimix_lark_bot.commands import get_registry
+        help_entry = get_registry().get("show_help")
+        help_kw = help_entry.exact_keywords[0] if help_entry and help_entry.exact_keywords else "帮助"
+        logger.info(f"Send '{help_kw}' in Feishu to see available commands.")
 
         # Send startup notification
         self._lifecycle._notify_startup()

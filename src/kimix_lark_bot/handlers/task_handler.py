@@ -29,6 +29,7 @@ from kimix_lark_bot.context import ConversationContext
 from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
 from kimix_lark_bot.task_logger import task_logger
 from kimix_lark_bot.long_output_handler import LongOutputHandler
+from kimix_lark_bot.commands import get_registry
 
 from kimix_lark_bot.opencode import (
     SessionRunner,
@@ -68,9 +69,12 @@ class TaskHandler(BaseHandler):
                 if p.status.value == "running"
             ]
             if not running:
+                registry = get_registry()
+                start_entry = registry.get("start_workspace")
+                start_kw = start_entry.fuzzy_keywords[0] if start_entry and start_entry.fuzzy_keywords else "启动"
                 card = CardRenderer.error(
                     "未找到会话",
-                    "没有正在运行的 Agent 会话。\n请先启动一个，例如：启动 sailzen",
+                    f"没有正在运行的 Agent 会话。\n请先启动一个，例如：{start_kw} sailzen",
                 )
                 self.ctx.messaging.reply_card(message_id, card)
                 return

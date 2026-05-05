@@ -23,6 +23,28 @@ from kimix_lark_bot.context import ConversationContext
 from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
 from kimix_lark_bot.task_logger import task_logger
 from kimix_lark_bot.opencode import extract_path_from_text
+from kimix_lark_bot.commands import get_registry
+
+
+def _get_verbs_from_registry() -> Dict[str, str]:
+    """Return common workspace verbs from CommandRegistry.
+
+    Keys: start, stop, switch.
+    """
+    registry = get_registry()
+    verbs: Dict[str, str] = {}
+    mapping = {
+        "start": "start_workspace",
+        "stop": "stop_workspace",
+        "switch": "switch_workspace",
+    }
+    for key, action in mapping.items():
+        entry = registry.get(action)
+        if entry and entry.fuzzy_keywords:
+            verbs[key] = entry.fuzzy_keywords[0]
+        elif entry and entry.exact_keywords:
+            verbs[key] = entry.exact_keywords[0]
+    return verbs
 
 
 class StartWorkspaceHandler(BaseHandler):
@@ -57,7 +79,13 @@ class StartWorkspaceHandler(BaseHandler):
             state_map = {}
             for proc in self.ctx.process_mgr.list_processes():
                 state_map[proc.path] = proc.status.value
-            card = CardRenderer.workspace_selection(projects, session_states=state_map)
+            verbs = _get_verbs_from_registry()
+            card = CardRenderer.workspace_selection(
+                projects,
+                session_states=state_map,
+                start_verb=verbs.get("start", "启动"),
+                switch_verb=verbs.get("switch", "使用"),
+            )
             self.ctx.messaging.reply_card(message_id, card, "workspace_selection")
             return
 
@@ -99,8 +127,12 @@ class StartWorkspaceHandler(BaseHandler):
                     )
 
                 # Send current workspace card
+                verbs = _get_verbs_from_registry()
                 workspace_card = CardRenderer.current_workspace(
-                    proc.path, mode="coding"
+                    proc.path,
+                    mode="coding",
+                    switch_verb=verbs.get("switch", "使用"),
+                    stop_verb=verbs.get("stop", "停止"),
                 )
                 self.ctx.messaging.send_card(
                     chat_id, workspace_card, "current_workspace", {"path": path}
@@ -296,10 +328,14 @@ class WorkspaceDashboardHandler(BaseHandler):
         ctx = self.ctx.get_or_create_context(chat_id)
         current_workspace = ctx.active_workspace
 
+        # Build dynamic hint from registry
+        text_hint = self._build_text_hint()
+
         dashboard_card = CardRenderer.workspace_dashboard(
             projects=self.ctx.config.projects,
             session_states=session_states,
             current_workspace=current_workspace,
+            text_hint=text_hint,
         )
 
         if message_id:
@@ -308,6 +344,24 @@ class WorkspaceDashboardHandler(BaseHandler):
             )
         else:
             self.ctx.messaging.send_card(chat_id, dashboard_card, "workspace_dashboard")
+
+    def _build_text_hint(self) -> str:
+        """Build a dynamic text hint for the dashboard footer from CommandRegistry."""
+        registry = get_registry()
+        hints: list[str] = []
+        for entry in registry.list_visible():
+            if entry.category != "工作区":
+                continue
+            kw = ""
+            if entry.fuzzy_keywords:
+                kw = entry.fuzzy_keywords[0]
+            elif entry.exact_keywords:
+                kw = entry.exact_keywords[0]
+            if kw:
+                hints.append(kw)
+        if hints:
+            return f"💡 也可直接发送文字指令，如：{' / '.join(hints)}"
+        return "💡 也可直接发送文字指令"
 
     def refresh(self, chat_id: str, message_id: str, ctx: ConversationContext) -> None:
         """Refresh an existing dashboard card in place."""
@@ -330,9 +384,11 @@ class WorkspaceDashboardHandler(BaseHandler):
                 else:
                     session_states[resolved_path] = "idle"
 
+        text_hint = self._build_text_hint()
         dashboard_card = CardRenderer.workspace_dashboard(
             projects=self.ctx.config.projects,
             session_states=session_states,
             current_workspace=ctx.active_workspace,
+            text_hint=text_hint,
         )
         self.ctx.messaging.update_card(message_id, dashboard_card)

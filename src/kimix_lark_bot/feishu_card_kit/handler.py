@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
-from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
+from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer, _status_verb
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +370,7 @@ Length: {len(content)} characters
 
         if context_path:
             elements.append(divider())
-            elements.append(note(f"💡 发送「状态 {Path(context_path).name}」查看详情"))
+            elements.append(note(f"💡 发送「{_status_verb()} {Path(context_path).name}」查看详情"))
 
         return {
             "config": {"wide_screen_mode": True},

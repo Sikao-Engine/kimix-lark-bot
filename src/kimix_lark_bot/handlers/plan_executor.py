@@ -3,12 +3,13 @@
 # @brief Plan execution coordinator
 # @author sailing-innocent
 # @date 2026-04-08
-# @version 2.0
+# @version 3.0
 # ---------------------------------
 """Plan execution coordinator.
 
 Routes ActionPlans to specific handlers via an action registry.
-New actions can be added by registering an entry in _ACTION_REGISTRY.
+New actions only need to be registered in ``kimix_lark_bot.commands``;
+the executor wiring is assembled dynamically from the registry.
 """
 
 import logging
@@ -25,8 +26,8 @@ logger = logging.getLogger(__name__)
 class PlanExecutor(BaseHandler):
     """Executor for ActionPlans.
 
-    Uses a registry dict to dispatch actions to handlers, making it trivial
-    to add new actions without modifying the execute() method.
+    Uses the central CommandRegistry to dispatch actions to handlers,
+    so that adding a new command only requires updating the registry.
     """
 
     def __init__(self, ctx: HandlerContext):
@@ -41,6 +42,7 @@ class PlanExecutor(BaseHandler):
         )
         from kimix_lark_bot.handlers.task_handler import TaskHandler
         from kimix_lark_bot.handlers.self_update_handler import SelfUpdateHandler
+        from kimix_lark_bot.commands import get_registry
 
         self._help = HelpHandler(ctx)
         self._status = StatusHandler(ctx)
@@ -51,20 +53,26 @@ class PlanExecutor(BaseHandler):
         self._task = TaskHandler(ctx)
         self._update = SelfUpdateHandler(ctx)
 
-        self._registry: Dict[str, tuple[Callable, str]] = {
-            "show_help": (self._exec_help, "显示帮助信息"),
-            "show_status": (self._exec_status, "状态已显示"),
-            "show_workspace_dashboard": (self._exec_dashboard, "显示工作区面板"),
-            "switch_workspace": (self._exec_switch, "切换工作区"),
-            "start_workspace": (self._exec_start, "启动工作区"),
-            "stop_workspace": (self._exec_stop, "停止工作区"),
-            "send_task": (self._exec_task, "发送任务"),
-            "self_update": (self._exec_self_update, "自更新"),
-            "confirm_self_update": (
-                self._exec_confirmed_self_update,
-                "正在执行自更新...",
-            ),
+        # Map action names to executor methods.
+        method_map: Dict[str, Callable] = {
+            "show_help": self._exec_help,
+            "show_status": self._exec_status,
+            "show_workspace_dashboard": self._exec_dashboard,
+            "switch_workspace": self._exec_switch,
+            "start_workspace": self._exec_start,
+            "stop_workspace": self._exec_stop,
+            "send_task": self._exec_task,
+            "self_update": self._exec_self_update,
+            "confirm_self_update": self._exec_confirmed_self_update,
         }
+
+        # Build _registry from the global CommandRegistry so log_msg stays in sync.
+        registry = get_registry()
+        self._registry: Dict[str, tuple[Callable, str]] = {}
+        for action, method in method_map.items():
+            entry = registry.get(action)
+            log_msg = entry.log_msg if entry else "执行完成"
+            self._registry[action] = (method, log_msg)
 
     def execute(
         self,

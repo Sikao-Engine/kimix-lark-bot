@@ -42,6 +42,18 @@ from kimix_lark_bot.feishu_card_kit.core import (
 )
 
 
+def _status_verb() -> str:
+    """Return the primary keyword for 'show_status' from CommandRegistry."""
+    try:
+        from kimix_lark_bot.commands import get_registry
+        entry = get_registry().get("show_status")
+        if entry and entry.exact_keywords:
+            return entry.exact_keywords[0]
+    except Exception:
+        pass
+    return "状态"
+
+
 # ---------------------------------------------------------------------------
 # Spinner characters for progress animation
 # ---------------------------------------------------------------------------
@@ -68,6 +80,7 @@ class CardRenderer:
         projects: List[Dict[str, str]],
         session_states: Optional[Dict[str, str]] = None,
         current_workspace: Optional[str] = None,
+        text_hint: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create an interactive workspace management dashboard.
 
@@ -175,7 +188,8 @@ class CardRenderer:
             )
 
         elements.append(action_row(global_buttons))
-        elements.append(note("💡 也可直接发送文字指令，如：启动 sailzen / 停止 / 状态"))
+        hint = text_hint or "💡 也可直接发送文字指令"
+        elements.append(note(hint))
 
         return card(
             elements=elements,
@@ -187,17 +201,21 @@ class CardRenderer:
     def workspace_selection(
         projects: List[Dict[str, str]],
         session_states: Optional[Dict[str, str]] = None,
+        start_verb: str = "启动",
+        switch_verb: str = "使用",
     ) -> Dict[str, Any]:
         """Create a workspace selection card.
 
         Args:
             projects: List of project dicts with keys: slug, label, path
             session_states: Optional dict mapping resolved paths to state strings
+            start_verb: Verb shown for starting a workspace (e.g. "启动")
+            switch_verb: Verb shown for switching workspace (e.g. "使用")
         """
         session_states = session_states or {}
         elements: List[Dict[str, Any]] = [
             text("📱 手机端快捷指令", bold=True),
-            note("直接发送「启动 <项目名>」即可快速启动"),
+            note(f"直接发送「{start_verb} <项目名>」即可快速启动"),
             divider(),
         ]
 
@@ -213,9 +231,9 @@ class CardRenderer:
             elements.append(text(f"{icon} **{label}** ({slug})  |  {state_label}"))
 
             if state in ("idle", "error"):
-                cmd_text = f"发送「启动 {slug}」启动此工作区"
+                cmd_text = f"发送「{start_verb} {slug}」启动此工作区"
             elif state == "running":
-                cmd_text = f"发送「使用 {slug}」切换到该工作区"
+                cmd_text = f"发送「{switch_verb} {slug}」切换到该工作区"
             else:
                 cmd_text = f"当前状态: {state_label}"
 
@@ -314,12 +332,19 @@ class CardRenderer:
         )
 
     @staticmethod
-    def current_workspace(path: str, mode: str = "coding") -> Dict[str, Any]:
+    def current_workspace(
+        path: str,
+        mode: str = "coding",
+        switch_verb: str = "使用",
+        stop_verb: str = "停止",
+    ) -> Dict[str, Any]:
         """Create a current workspace indicator card.
 
         Args:
             path: Current workspace path
             mode: Current mode (coding/idle)
+            switch_verb: Verb shown for switching (e.g. "使用")
+            stop_verb: Verb shown for stopping (e.g. "停止")
         """
         name = Path(path).name if path else "未知"
 
@@ -329,8 +354,8 @@ class CardRenderer:
             divider(),
             text("💡 **你可以：**"),
             note("• 直接发送任务指令"),
-            note("• 发送「使用 <其他项目>」切换"),
-            note(f"• 发送「停止 {name}」停止当前工作区"),
+            note(f"• 发送「{switch_verb} <其他项目>」切换"),
+            note(f"• 发送「{stop_verb} {name}」停止当前工作区"),
         ]
 
         return card(
@@ -671,7 +696,7 @@ class CardRenderer:
             if remaining > 0:
                 notes.append(f"💡 发送「撤销」撤销此操作（{int(remaining)}秒内有效）")
         if context_path:
-            notes.append(f"💡 发送「状态 {Path(context_path).name}」查看详情")
+            notes.append(f"💡 发送「{_status_verb()} {Path(context_path).name}」查看详情")
 
         if notes:
             elements.append(divider())
@@ -709,7 +734,7 @@ class CardRenderer:
         if can_retry and retry_action:
             notes.append("💡 发送「重试」重新执行")
         if context_path:
-            notes.append(f"💡 发送「状态 {Path(context_path).name}」查看详情")
+            notes.append(f"💡 发送「{_status_verb()} {Path(context_path).name}」查看详情")
 
         if notes:
             elements.append(divider())
