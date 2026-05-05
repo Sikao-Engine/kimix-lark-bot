@@ -365,7 +365,6 @@ class WorkspaceDashboardHandler(BaseHandler):
 
     def refresh(self, chat_id: str, message_id: str, ctx: ConversationContext) -> None:
         """Refresh an existing dashboard card in place."""
-        self.ctx.reload_config()
         # Build session state map
         session_states: Dict[str, str] = {}
         proc_map = {p.path: p for p in self.ctx.process_mgr.list_processes()}

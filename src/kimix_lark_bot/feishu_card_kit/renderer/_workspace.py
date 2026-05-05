@@ -46,7 +46,6 @@ class WorkspaceRenderer:
             session_states: Optional dict mapping resolved paths to state strings
             current_workspace: Currently active workspace path
         """
-        print("Rendering workspace dashboard with projects:", projects)
         session_states = session_states or {}
         elements: List[Dict[str, Any]] = [
             text("📱 **手机端完全按钮化操作**", bold=True),

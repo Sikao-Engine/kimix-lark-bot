@@ -263,6 +263,10 @@ class OpenCodeProcessManager:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.ensure_running, path, chat_id)
 
+    async def get_or_create_api_session_async(self, path: str) -> Optional[str]:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.get_or_create_api_session, path)
+
     async def stop_async(self, path: str) -> Tuple[bool, str]:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.stop, path)
@@ -368,21 +372,33 @@ class OpenCodeProcessManager:
     def _allocate_port(self) -> int:
         used = {p.port for p in self._processes.values() if p.port}
         port = self.base_port
+        max_port = 65535
         while port in used or _port_open(port):
             port += 1
+            if port > max_port:
+                raise RuntimeError(
+                    f"No available port found in range {self.base_port}-{max_port}"
+                )
         return port
 
     # ── 内部：路径解析 ────────────────────────────────────────────
 
-    def _resolve_path(self, path: str, must_exist: bool = True) -> Optional[str]:
+    def _resolve_path(
+        self, path: str, must_exist: bool = True, _seen: Optional[set] = None
+    ) -> Optional[str]:
         if not path:
             return None
         lower = path.strip().lower()
+        _seen = _seen or set()
+        if lower in _seen:
+            logger.warning("[ProcessManager] Circular project reference detected for %s", path)
+            return None
+        _seen.add(lower)
         for p in self._projects:
             if p.get("slug", "").lower() == lower or p.get("label", "").lower() == lower:
                 raw = p.get("path", "")
                 if raw:
-                    return self._resolve_path(raw, must_exist=must_exist)
+                    return self._resolve_path(raw, must_exist=must_exist, _seen=_seen)
         try:
             resolved = str(Path(path).expanduser().resolve())
             if must_exist and not Path(resolved).exists():

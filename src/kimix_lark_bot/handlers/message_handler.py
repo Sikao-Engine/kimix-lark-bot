@@ -146,9 +146,10 @@ class MessageHandler(BaseHandler):
                 ctx.push("bot", "已取消")
                 return ActionPlan(action="noop"), None
             else:
-                ctx.clear_pending()
+                # 用户发送了不相关的消息，保留 pending 并提示
                 self.ctx.messaging.reply_text(
-                    message_id, "确认已超时，请重新发起指令。"
+                    message_id,
+                    f"⏳ 有待确认的操作：{ctx.pending.summary}\n请回复「确认」或「取消」。",
                 )
                 return ActionPlan(action="noop"), None
 

@@ -83,7 +83,7 @@ class PlanExecutor(BaseHandler):
         thinking_mid: Optional[str] = None,
     ) -> None:
         """Execute an ActionPlan by dispatching to the registered handler."""
-        print("executing plan:", plan)
+        logger.debug("Executing plan: %s", plan)
         entry = self._registry.get(plan.action)
         if entry:
             handler_fn, log_msg = entry

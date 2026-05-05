@@ -31,6 +31,8 @@ from kimix_lark_bot.task_logger import task_logger
 from kimix_lark_bot.long_output_handler import LongOutputHandler
 from kimix_lark_bot.commands import get_registry
 
+from kimix_lark_bot.feishu_card_kit.core import divider, note, text, button, action_row, ButtonStyle
+
 from kimix_lark_bot.opencode import (
     SessionRunner,
     PrinterCallbacks,
@@ -159,7 +161,7 @@ class TaskHandler(BaseHandler):
             return
 
         # 2) Get or create OpenCode API session
-        sess_id = self.ctx.process_mgr.get_or_create_api_session(path)
+        sess_id = await self.ctx.process_mgr.get_or_create_api_session_async(path)
         if not sess_id:
             self.ctx.op_tracker.finish(op_id)
             err_card = CardRenderer.error(
@@ -363,14 +365,12 @@ class TaskHandler(BaseHandler):
             filled = int(pct // 10)
             bar = "█" * filled + "░" * (10 - filled)
             color_hint = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴"
-            from kimix_lark_bot.feishu_card_kit.core import note
             error_card["elements"].append(
                 note(f"{color_hint} Context 容量: {bar} {pct:.1f}%")
             )
         if session_actions:
             sess_id = session_actions.get("session_id", "")
             port = session_actions.get("port", 0)
-            from kimix_lark_bot.feishu_card_kit.core import button, action_row, ButtonStyle
             buttons = []
             if sess_id:
                 buttons.append(

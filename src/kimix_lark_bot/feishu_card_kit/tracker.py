@@ -26,8 +26,9 @@ class CardMessageTracker:
     look up cards by their context.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_size: int = 2000) -> None:
         self._map: Dict[str, Dict[str, Any]] = {}
+        self._max_size = max_size
 
     def register(
         self, message_id: str, card_type: str, context: Dict[str, Any]
@@ -39,6 +40,11 @@ class CardMessageTracker:
             card_type: Type identifier (e.g. "progress", "result")
             context: Arbitrary context dict (e.g. {"op_id": "xxx", "path": "..."})
         """
+        if len(self._map) >= self._max_size:
+            # Remove oldest 20% to make room
+            remove_count = max(1, self._max_size // 5)
+            for key in list(self._map.keys())[:remove_count]:
+                self._map.pop(key, None)
         self._map[message_id] = {"card_type": card_type, "context": context}
 
     def get(self, message_id: str) -> Optional[Dict[str, Any]]:

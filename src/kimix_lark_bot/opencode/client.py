@@ -247,7 +247,6 @@ class OpenCodeAsyncClient:
         """异步健康检查。"""
         try:
             url = f"{self._base_url}/global/health"
-            print(url)
             resp = await self._client.get(url)
             data = resp.json()
             healthy = data.get("healthy", False)

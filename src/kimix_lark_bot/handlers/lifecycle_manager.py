@@ -80,41 +80,70 @@ class LifecycleManager:
         print("\n[Cleanup] 检查之前遗留的进程...")
 
         killed_count = 0
+
+        # First, try precise PID cleanup from state file
+        from kimix_lark_bot.paths import SESSIONS_FILE
         try:
-            if sys.platform == "win32":
-                result = subprocess.run(
-                    ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV", "/V"],
-                    capture_output=True, text=True, encoding="utf-8", errors="ignore",
-                )
-                if result.returncode == 0:
-                    lines = result.stdout.strip().split("\n")
-                    for line in lines[1:]:
-                        if "feishu_agent" in line.lower() or "opencode" in line.lower():
-                            parts = line.strip('"').split('","')
-                            if len(parts) >= 2:
-                                pid = parts[1]
-                                print(f"[Cleanup] 发现遗留进程 PID {pid}，正在终止...")
+            if SESSIONS_FILE.exists():
+                import json
+                data = json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
+                for item in data:
+                    pid = item.get("pid")
+                    if pid and int(pid) != os.getpid():
+                        try:
+                            if sys.platform == "win32":
                                 subprocess.run(
-                                    ["taskkill", "/PID", pid, "/T", "/F"],
+                                    ["taskkill", "/PID", str(pid), "/T", "/F"],
                                     check=False, capture_output=True,
                                 )
-                                killed_count += 1
-            else:
-                result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
-                for line in result.stdout.split("\n"):
-                    if "feishu_agent" in line.lower() or (
-                        "python" in line.lower() and "opencode" in line.lower()
-                    ):
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            pid = parts[1]
-                            try:
+                            else:
                                 os.kill(int(pid), signal.SIGTERM)
-                                killed_count += 1
-                            except Exception:
-                                pass
+                            killed_count += 1
+                            print(f"[Cleanup] 终止遗留进程 PID {pid}")
+                        except (ProcessLookupError, OSError):
+                            pass  # Already gone
+                        except Exception:
+                            pass
         except Exception as e:
-            print(f"[Cleanup] 进程检查失败: {e}")
+            print(f"[Cleanup] 状态文件清理失败: {e}")
+
+        # Fallback: heuristic cleanup only if precise cleanup found nothing
+        if killed_count == 0:
+            try:
+                if sys.platform == "win32":
+                    result = subprocess.run(
+                        ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV", "/V"],
+                        capture_output=True, text=True, encoding="utf-8", errors="ignore",
+                    )
+                    if result.returncode == 0:
+                        lines = result.stdout.strip().split("\n")
+                        for line in lines[1:]:
+                            if "feishu_agent" in line.lower() or "opencode" in line.lower():
+                                parts = line.strip('"').split('","')
+                                if len(parts) >= 2:
+                                    pid = parts[1]
+                                    print(f"[Cleanup] 发现遗留进程 PID {pid}，正在终止...")
+                                    subprocess.run(
+                                        ["taskkill", "/PID", pid, "/T", "/F"],
+                                        check=False, capture_output=True,
+                                    )
+                                    killed_count += 1
+                else:
+                    result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+                    for line in result.stdout.split("\n"):
+                        if "feishu_agent" in line.lower() or (
+                            "python" in line.lower() and "opencode" in line.lower()
+                        ):
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                pid = parts[1]
+                                try:
+                                    os.kill(int(pid), signal.SIGTERM)
+                                    killed_count += 1
+                                except Exception:
+                                    pass
+            except Exception as e:
+                print(f"[Cleanup] 启发式清理失败: {e}")
 
         # Clean orphaned state entries
         config_paths = set()

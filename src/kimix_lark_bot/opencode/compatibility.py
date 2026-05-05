@@ -25,12 +25,13 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import shutil
-import subprocess
-import socket
-import time
 import signal
+import socket
+import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -86,7 +87,6 @@ def _kill_process(pid: int) -> None:
                 check=False, capture_output=True,
             )
         else:
-            import os
             os.kill(pid, signal.SIGTERM)
     except Exception:
         pass

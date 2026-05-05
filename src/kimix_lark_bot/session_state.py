@@ -509,6 +509,7 @@ class ConfirmationManager:
     def __init__(self) -> None:
         self._pending: Dict[str, PendingAction] = {}
         self._action_confirm_counts: Dict[str, int] = {}
+        self._lock = threading.Lock()
 
     def create(
         self,
@@ -531,30 +532,35 @@ class ConfirmationManager:
             timeout_seconds=timeout_seconds,
             can_undo=can_undo,
         )
-        self._pending[pid] = pending
+        with self._lock:
+            self._pending[pid] = pending
         return pending
 
     def consume(self, pending_id: str) -> Optional[PendingAction]:
-        pending = self._pending.pop(pending_id, None)
-        if pending and not pending.is_expired():
-            key = pending.action
-            self._action_confirm_counts[key] = (
-                self._action_confirm_counts.get(key, 0) + 1
-            )
-            return pending
-        return None
+        with self._lock:
+            pending = self._pending.pop(pending_id, None)
+            if pending and not pending.is_expired():
+                key = pending.action
+                self._action_confirm_counts[key] = (
+                    self._action_confirm_counts.get(key, 0) + 1
+                )
+                return pending
+            return None
 
     def cancel(self, pending_id: str) -> bool:
-        return self._pending.pop(pending_id, None) is not None
+        with self._lock:
+            return self._pending.pop(pending_id, None) is not None
 
     def cleanup_expired(self) -> List[str]:
-        expired = [pid for pid, p in self._pending.items() if p.is_expired()]
-        for pid in expired:
-            self._pending.pop(pid, None)
-        return expired
+        with self._lock:
+            expired = [pid for pid, p in self._pending.items() if p.is_expired()]
+            for pid in expired:
+                self._pending.pop(pid, None)
+            return expired
 
     def should_bypass(self, action: str, force: bool = False) -> bool:
         if force:
             return True
-        count = self._action_confirm_counts.get(action, 0)
-        return count >= self.SESSION_BYPASS_THRESHOLD
+        with self._lock:
+            count = self._action_confirm_counts.get(action, 0)
+            return count >= self.SESSION_BYPASS_THRESHOLD

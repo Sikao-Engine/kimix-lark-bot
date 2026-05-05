@@ -327,6 +327,15 @@ class FeishuBotAgent:
         ws_thread = threading.Thread(target=ws_client.start, daemon=True)
         ws_thread.start()
 
+        # Start periodic context save thread
+        def _periodic_save() -> None:
+            while not shutdown_event.is_set():
+                shutdown_event.wait(30.0)
+                self._save_contexts()
+
+        save_thread = threading.Thread(target=_periodic_save, daemon=True)
+        save_thread.start()
+
         try:
             while not shutdown_event.is_set():
                 if self._update_orchestrator.should_exit():
@@ -339,9 +348,11 @@ class FeishuBotAgent:
             logger.error("Fatal error: %s", exc, exc_info=True)
             exit_code = 1
         finally:
+            shutdown_event.set()
             if hasattr(ws_client, "stop"):
                 ws_client.stop()
             self._lifecycle.on_shutdown()
+            self._save_contexts()
 
             if self._update_orchestrator.should_exit():
                 exit_code = self._update_orchestrator.exit_code

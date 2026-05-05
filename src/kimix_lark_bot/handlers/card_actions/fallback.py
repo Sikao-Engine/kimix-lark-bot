@@ -52,4 +52,7 @@ class FallbackActionHandler(BaseHandler):
         """Execute plan in background (placeholder for agent integration)."""
         # This method should be overridden or the agent should handle this
         # For now, just log that the action was received
-        print(f"[FallbackActionHandler] Background execution: {plan.action}")
+        import logging
+        logging.getLogger(__name__).info(
+            "[FallbackActionHandler] Background execution: %s", plan.action
+        )
