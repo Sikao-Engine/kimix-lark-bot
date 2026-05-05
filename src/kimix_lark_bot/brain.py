@@ -13,19 +13,15 @@ into structured ActionPlan objects using LLM or deterministic matching.
 
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
-import asyncio
-import re
-import json
-import os
-import time
-import ast
 from kimix_lark_bot.context import (
     ConversationContext,
     ActionPlan,
     PendingConfirmation,
 )
-from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
 from kimix_lark_bot.opencode import extract_path_from_text
+import logging
+
+logger = logging.getLogger(__name__)
 
 _CONFIRM_WORDS = {
     "是",
@@ -137,29 +133,41 @@ class BotBrain:
 
             brain(f"Level 1 matched: {plan.action}")
             return plan
-
-        # Level 2: 简单匹配失败，且用户可能说了复杂内容，尝试 LLM
-        if self._gw:
-            try:
-                import asyncio
-
-                loop = asyncio.new_event_loop()
-                try:
-                    plan = loop.run_until_complete(self._think_llm(text, ctx))
-                finally:
-                    loop.close()
-                if plan.action != "chat":
-                    brain(f"Level 2 matched: {plan.action}")
-                    return plan
-                # LLM 返回 chat，说明它也没理解，继续降级
-            except Exception as exc:
-                from kimix_lark_bot.log_formatter import error
-
-                error("Brain", f"LLM failed: {exc}")
-
+        # TODO: Level 2 - LLM 语义理解（目前未实现，直接降级）
         # Level 3: 优雅降级 - 返回通用 chat
         brain("Level 3 fallback to chat")
         return self._create_fallback_plan(text, ctx)
+
+    async def think_with_feedback(
+        self,
+        text: str,
+        ctx: ConversationContext,
+        chat_id: str,
+        message_id: str,
+        agent: "FeishuBotAgent",  # noqa: F821
+        use_thinking_card: bool = True,
+    ) -> Tuple[ActionPlan, Optional[str]]:
+        """Think with UX feedback - returns (ActionPlan, thinking_card_message_id or None).
+
+        渐进式识别流程:
+        1. 先尝试 regex 匹配 (不显示 thinking card)
+        2. regex 失败才显示 thinking card 并调用 LLM
+        3. LLM 失败优雅降级
+        """
+        # Resolve messaging client from agent
+        messaging = agent.messaging
+        # Level 1: 先尝试确定性匹配 (不显示 thinking card)
+        plan = self._think_deterministic(text, ctx)
+        if plan.action != "chat":
+            logger.info(f"[BotBrain] Level 1 matched (no LLM needed): {plan.action}")
+            return plan, None
+
+        # Level 2: 需要 LLM，显示 thinking card
+        # TODO: 实际调用 LLM 进行语义理解，目前直接降级
+        thinking_mid = None
+
+        plan = self._create_fallback_plan(text, ctx)
+        return plan, thinking_mid
 
     def _create_fallback_plan(self, text: str, ctx: ConversationContext) -> ActionPlan:
         """创建优雅降级的 chat 响应。"""
@@ -204,124 +212,6 @@ class BotBrain:
         if t in _CANCEL_WORDS:
             return False
         return None
-
-    async def think_with_feedback(
-        self,
-        text: str,
-        ctx: ConversationContext,
-        chat_id: str,
-        message_id: str,
-        agent: "FeishuBotAgent",  # noqa: F821
-        use_thinking_card: bool = True,
-    ) -> Tuple[ActionPlan, Optional[str]]:
-        """Think with UX feedback - returns (ActionPlan, thinking_card_message_id or None).
-
-        渐进式识别流程:
-        1. 先尝试 regex 匹配 (不显示 thinking card)
-        2. regex 失败才显示 thinking card 并调用 LLM
-        3. LLM 失败优雅降级
-        """
-        # Resolve messaging client from agent
-        messaging = agent.messaging
-
-        # Level 1: 先尝试确定性匹配 (不显示 thinking card)
-        plan = self._think_deterministic(text, ctx)
-        if plan.action != "chat":
-            print(f"[BotBrain] Level 1 matched (no LLM needed): {plan.action}")
-            return plan, None
-
-        # Level 2: 需要 LLM，显示 thinking card
-        if use_thinking_card and self._gw:
-            thinking_card = CardRenderer.progress(
-                "正在理解你的意图", "AI正在分析中，请稍候..."
-            )
-            thinking_mid = messaging.reply_card(
-                message_id, thinking_card, "thinking", {"user_text": text[:50]}
-            )
-        else:
-            thinking_mid = None
-
-        try:
-            # 没有 LLM 或 LLM 也没理解，优雅降级
-            plan = self._create_fallback_plan(text, ctx)
-            return plan, thinking_mid
-        except Exception as exc:
-            print(f"[{chat_id}] LLM failed: {exc}")
-            # 更新 thinking card 显示降级
-            if thinking_mid:
-                fallback_card = CardRenderer.result(
-                    "已切换到备用模式",
-                    "AI理解遇到了问题，正在使用备用模式为你服务。",
-                    success=True,
-                )
-                messaging.update_card(thinking_mid, fallback_card)
-            # 返回降级 plan
-            plan = self._create_fallback_plan(text, ctx)
-            return plan, thinking_mid
-
-    def _parse_llm_json(self, raw: str, chat_id: Optional[str] = None) -> dict:
-        """Parse JSON from LLM response with robust error handling.
-
-        LLMs often return malformed JSON with:
-        - Single quotes instead of double quotes
-        - Trailing commas
-        - Missing quotes around property names
-        - Python-style True/False/None instead of true/false/null
-        """
-        # FIX: Import moved to top level
-        chat_prefix = f"[{chat_id}] " if chat_id else ""
-
-        # Try standard JSON parsing first
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as e:
-            print(f"{chat_prefix}[LLM] JSON parse failed (attempt 1): {e}")
-
-        # Fix common LLM JSON issues
-        cleaned = raw
-
-        # Replace Python-style booleans and None with JSON equivalents
-        cleaned = re.sub(r"\bTrue\b", "true", cleaned)
-        cleaned = re.sub(r"\bFalse\b", "false", cleaned)
-        cleaned = re.sub(r"\bNone\b", "null", cleaned)
-
-        # Try JSON parsing again after boolean fixes
-        try:
-            result = json.loads(cleaned)
-            print(f"{chat_prefix}[LLM] JSON parsed after boolean fix")
-            return result
-        except json.JSONDecodeError as e:
-            print(
-                f"{chat_prefix}[LLM] JSON parse failed (attempt 2 after boolean fix): {e}"
-            )
-
-        # Try to use ast.literal_eval as a fallback for Python dict-like structures
-        try:
-            # This handles single quotes and other Python syntax
-            result = ast.literal_eval(cleaned)
-            if isinstance(result, dict):
-                print(f"{chat_prefix}[LLM] Parsed with ast.literal_eval")
-                return result
-        except (ValueError, SyntaxError) as e:
-            print(f"{chat_prefix}[LLM] ast.literal_eval failed: {e}")
-
-        # Last resort: try to extract JSON-like structure with regex
-        # Look for key-value pairs and reconstruct
-        try:
-            # Simple pattern to extract action and other fields
-            pattern = r'["\']?action["\']?\s*[:=]\s*["\']([^"\']+)["\']'
-            action_match = re.search(pattern, cleaned, re.IGNORECASE)
-            if action_match:
-                print(
-                    f"{chat_prefix}[LLM] Extracted action via regex: {action_match.group(1)}"
-                )
-                return {"action": action_match.group(1)}
-        except Exception as e:
-            print(f"{chat_prefix}[LLM] Regex extraction failed: {e}")
-
-        # If all parsing fails, return a default action (graceful degradation)
-        print(f"{chat_prefix}[LLM] All parsing attempts failed. Raw: {raw[:300]}")
-        return {"action": "chat"}
 
     def _think_deterministic(self, text: str, ctx: ConversationContext) -> ActionPlan:
         """确定性意图识别 - 基于当前状态进行不同的处理逻辑。

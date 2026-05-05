@@ -95,7 +95,7 @@ def main() -> int:
         try:
             watcher.run()
         except KeyboardInterrupt:
-            print("\n[Watcher] Stopped by user")
+            logger.info("\n[Watcher] Stopped by user")
         return 0
 
     return run_worker(config_path, restore_state=args.restore_state)

@@ -11,10 +11,6 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
-_VALID_LLM_PROVIDERS = frozenset(
-    ["moonshot", "openai", "google", "deepseek", "anthropic"]
-)
-
 
 class AgentConfig(BaseModel):
     """Bot configuration with validation."""
@@ -22,20 +18,16 @@ class AgentConfig(BaseModel):
     app_id: str = ""
     app_secret: str = ""
     projects: list[dict[str, str]] = Field(default_factory=list)
-    cli_tool: str = "opencode-cli"
-    base_port: int = Field(default=4096, ge=1024, le=65535)
+    cli_tool: str = "kimix"
+    base_port: int = Field(default=4567, ge=1024, le=65535)
     max_sessions: int = Field(default=10, ge=1, le=50)
     callback_timeout: int = 300
     auto_restart: bool = False
-    llm_provider: str | None = None
-    llm_api_key: str | None = None
     admin_chat_id: str | None = None
     default_chat_id: str | None = None
     config_path: str | None = None
 
-    @field_validator(
-        "llm_provider", "llm_api_key", "admin_chat_id", "default_chat_id", mode="before"
-    )
+    @field_validator("admin_chat_id", "default_chat_id", mode="before")
     @classmethod
     def _empty_to_none(cls, v: object) -> str | None:
         return v if v else None
@@ -62,10 +54,6 @@ class AgentConfig(BaseModel):
             warnings.append("app_id is empty - Feishu connection will fail")
         if not self.app_secret:
             warnings.append("app_secret is empty - Feishu connection will fail")
-        if self.llm_provider and self.llm_provider not in _VALID_LLM_PROVIDERS:
-            warnings.append(
-                f"Unknown llm_provider: {self.llm_provider} (valid: {', '.join(_VALID_LLM_PROVIDERS)})"
-            )
         for p in self.projects:
             path = p.get("path", "")
             if path:
@@ -104,9 +92,7 @@ def create_default_config(config_path: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
 
     config = AgentConfig(
-        projects=[
-            {"slug": "sailzen", "path": "~/repos/SailZen", "label": "SailZen"}
-        ]
+        projects=[{"slug": "sailzen", "path": "~/repos/SailZen", "label": "SailZen"}]
     )
 
     header = """\

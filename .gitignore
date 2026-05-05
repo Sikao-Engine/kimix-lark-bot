@@ -4,3 +4,4 @@ bot.yaml
 __pycache__/
 data/*
 sse_log_*
+*.bot.yaml

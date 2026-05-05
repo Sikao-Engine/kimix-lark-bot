@@ -47,10 +47,7 @@ class WelcomeHandler(BaseHandler):
                         session_states[path] = "idle"
 
             # Build feature status list
-            features: list[tuple[str, str]] = [
-                ("LLM", "就绪" if self.ctx.brain._gw is not None else "未配置"),
-                ("自更新", "已启用"),
-            ]
+            features: list[tuple[str, str]] = []
 
             # Generate welcome card
             welcome_card = CardRenderer.welcome(
@@ -66,4 +63,5 @@ class WelcomeHandler(BaseHandler):
         except Exception as exc:
             print(f"[WelcomeHandler] Error sending welcome card: {exc}")
             import traceback
+
             traceback.print_exc()

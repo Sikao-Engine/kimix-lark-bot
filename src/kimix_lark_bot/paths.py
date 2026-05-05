@@ -32,6 +32,7 @@ import os
 # Root resolution
 # ---------------------------------------------------------------------------
 
+
 def _find_project_root() -> Path:
     """Find the SailZen project root (where pyproject.toml lives)."""
     # Start from this file's directory and walk up
@@ -71,9 +72,17 @@ CONTEXTS_FILE: Path = STATE_DIR / "contexts.json"
 # Initialization
 # ---------------------------------------------------------------------------
 
+
 def ensure_dirs() -> None:
     """Create all data directories if they don't exist."""
-    for d in (STATE_DIR, LOG_DIR, TASK_LOG_DIR, BACKUP_DIR, OPENCODE_LOG_DIR, OUTPUT_DIR):
+    for d in (
+        STATE_DIR,
+        LOG_DIR,
+        TASK_LOG_DIR,
+        BACKUP_DIR,
+        OPENCODE_LOG_DIR,
+        OUTPUT_DIR,
+    ):
         d.mkdir(parents=True, exist_ok=True)
 
 

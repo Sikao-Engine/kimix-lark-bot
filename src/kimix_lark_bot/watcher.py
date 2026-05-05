@@ -18,7 +18,7 @@ Exit-code contract (shared with worker):
 import json
 import os
 import subprocess
-import sys
+import logging
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -29,6 +29,8 @@ EXIT_CODE_UPDATE = 42
 EXIT_CODE_NORMAL = 0
 MAX_RESTART_ATTEMPTS = 5
 RESTART_BACKOFF_SECONDS = [1, 2, 5, 10, 30]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -85,7 +87,7 @@ class BotWatcher:
                         state.consecutive_crashes = 0
                 return state
             except Exception as exc:
-                print(f"[Watcher] Failed to load state: {exc}")
+                logger.info(f"[Watcher] Failed to load state: {exc}")
         return RestartState()
 
     def _save_state(self) -> None:
@@ -95,12 +97,12 @@ class BotWatcher:
                 encoding="utf-8",
             )
         except Exception as exc:
-            print(f"[Watcher] Failed to save state: {exc}")
+            logger.info(f"[Watcher] Failed to save state: {exc}")
 
     # ── git pull ────────────────────────────────────────────────────
 
     def _perform_git_pull(self) -> bool:
-        print("[Watcher] Performing git pull...")
+        logger.info("[Watcher] Performing git pull...")
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
@@ -120,17 +122,17 @@ class BotWatcher:
             self.restart_state.last_git_pull_at = datetime.now().isoformat()
 
             if result.returncode == 0:
-                print("[Watcher] Git pull successful")
+                logger.info("[Watcher] Git pull successful")
                 if result.stdout:
-                    print(f"[Watcher] Output: {result.stdout.strip()}")
+                    logger.info(f"[Watcher] Output: {result.stdout.strip()}")
                 self.restart_state.git_pull_success = True
                 return True
             else:
-                print(f"[Watcher] Git pull failed: {result.stderr}")
+                logger.info(f"[Watcher] Git pull failed: {result.stderr}")
                 self.restart_state.git_pull_success = False
                 return False
         except Exception as exc:
-            print(f"[Watcher] Git pull error: {exc}")
+            logger.info(f"[Watcher] Git pull error: {exc}")
             self.restart_state.git_pull_success = False
             return False
 
@@ -146,8 +148,8 @@ class BotWatcher:
         env = os.environ.copy()
         env["BOT_WATCHER_ENABLED"] = "1"
 
-        print(f"[Watcher] Starting bot: {' '.join(cmd)}")
-        print(f"[Watcher] Restart #{self.restart_state.restart_count + 1}")
+        logger.info(f"[Watcher] Starting bot: {' '.join(cmd)}")
+        logger.info(f"[Watcher] Restart #{self.restart_state.restart_count + 1}")
 
         process: Optional[subprocess.Popen] = None
         try:
@@ -155,7 +157,7 @@ class BotWatcher:
             exit_code = process.wait()
             return exit_code
         except KeyboardInterrupt:
-            print("\n[Watcher] Interrupted by user")
+            logger.info("\n[Watcher] Interrupted by user")
             if process is not None and process.poll() is None:
                 process.terminate()
                 try:
@@ -164,23 +166,23 @@ class BotWatcher:
                     process.kill()
             return EXIT_CODE_NORMAL
         except Exception as exc:
-            print(f"[Watcher] Failed to start bot: {exc}")
+            logger.info(f"[Watcher] Failed to start bot: {exc}")
             return 1
 
     # ── restart policy ──────────────────────────────────────────────
 
     def _should_restart(self, exit_code: int) -> bool:
         if exit_code == EXIT_CODE_NORMAL:
-            print("[Watcher] Bot exited normally, not restarting")
+            logger.info("[Watcher] Bot exited normally, not restarting")
             return False
 
         if exit_code == EXIT_CODE_UPDATE:
-            print("[Watcher] Bot requested update restart")
+            logger.info("[Watcher] Bot requested update restart")
             return True
 
         self.restart_state.consecutive_crashes += 1
         if self.restart_state.consecutive_crashes >= self.max_restarts:
-            print(
+            logger.info(
                 f"[Watcher] Too many consecutive crashes "
                 f"({self.restart_state.consecutive_crashes}), giving up"
             )
@@ -197,11 +199,11 @@ class BotWatcher:
     # ── main loop ───────────────────────────────────────────────────
 
     def run(self) -> None:
-        print("=" * 60)
-        print("Bot Watcher Started")
-        print(f"Config: {self.config_path}")
-        print(f"State file: {self.state_file}")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("Bot Watcher Started")
+        logger.info(f"Config: {self.config_path}")
+        logger.info(f"State file: {self.state_file}")
+        logger.info("=" * 60)
 
         self._running = True
         while self._running:
@@ -211,7 +213,7 @@ class BotWatcher:
 
             exit_code = self._start_bot()
             self.restart_state.last_exit_code = exit_code
-            print(f"[Watcher] Bot exited with code: {exit_code}")
+            logger.info(f"[Watcher] Bot exited with code: {exit_code}")
 
             if not self._should_restart(exit_code):
                 break
@@ -220,17 +222,17 @@ class BotWatcher:
                 self.restart_state.consecutive_crashes = 0
                 git_success = self._perform_git_pull()
                 if not git_success:
-                    print(
+                    logger.info(
                         "[Watcher] Warning: git pull failed, "
                         "will restart with current code"
                     )
                 time.sleep(1)
             else:
                 delay = self._get_backoff_delay()
-                print(f"[Watcher] Waiting {delay}s before restart...")
+                logger.info(f"[Watcher] Waiting {delay}s before restart...")
                 time.sleep(delay)
 
             self._save_state()
 
-        print("[Watcher] Shutting down")
+        logger.info("[Watcher] Shutting down")
         self._save_state()

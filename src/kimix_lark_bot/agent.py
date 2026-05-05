@@ -75,8 +75,6 @@ class FeishuBotAgent:
         # AI brain
         self.brain = BotBrain(
             config.projects,
-            llm_provider=config.llm_provider,
-            llm_api_key=config.llm_api_key,
         )
 
         # Conversation contexts
@@ -105,7 +103,7 @@ class FeishuBotAgent:
         self._lifecycle = LifecycleManager(self)
         self._welcome_handler = WelcomeHandler(self._handler_ctx)
 
-        logger.info("FeishuBotAgent initialized (v3.0)")
+        logger.info("FeishuBotAgent initialized")
 
     # ------------------------------------------------------------------
     # Context management
