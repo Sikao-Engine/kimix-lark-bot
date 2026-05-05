@@ -47,10 +47,11 @@ def _bootstrap() -> CommandRegistry:
     r.register(
         CommandEntry(
             action="show_workspace_dashboard",
+            exact_keywords=["工作区"],
             fuzzy_keywords=["面板", "dashboard", "管理"],
             title="工作区面板",
             description="显示交互式工作区管理面板",
-            examples=["面板", "管理", "!面板"],
+            examples=["工作区", "面板", "管理", "!面板"],
             category="信息",
             format_hint="面板",
             log_msg="显示工作区面板",
