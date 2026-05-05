@@ -258,18 +258,44 @@ class TaskHandler(BaseHandler):
         self.ctx.op_tracker.finish(op_id)
         elapsed = int(time.time() - start_time)
 
+        # Fetch context usage from the serve backend
+        context_usage: Optional[float] = None
+        try:
+            context_info = await runner._client.get_session_context(sess_id)
+            usage = context_info.get("context_usage")
+            if isinstance(usage, (int, float)):
+                context_usage = float(usage)
+        except Exception:
+            pass
+
+        session_actions = {
+            "session_id": sess_id,
+            "port": proc.port,
+            "path": path,
+        }
+
         if result.success:
-            self._handle_success(chat_id, ctx, path, prog_mid, result, elapsed, task_text)
+            self._handle_success(
+                chat_id, ctx, path, prog_mid, result, elapsed, task_text,
+                context_usage=context_usage,
+                session_actions=session_actions,
+            )
         elif result.was_cancelled:
             cancel_card = CardRenderer.result(
                 "任务已取消",
                 f"任务在 {elapsed}s 后被取消。\n{result.as_brief(200)}",
                 success=False, context_path=path,
+                context_usage=context_usage,
+                session_actions=session_actions,
             )
             if prog_mid:
                 self.ctx.messaging.update_card(prog_mid, cancel_card)
         else:
-            self._handle_error(chat_id, ctx, path, prog_mid, result, elapsed)
+            self._handle_error(
+                chat_id, ctx, path, prog_mid, result, elapsed,
+                context_usage=context_usage,
+                session_actions=session_actions,
+            )
 
     def _handle_success(
         self,
@@ -280,6 +306,8 @@ class TaskHandler(BaseHandler):
         result: RunResult,
         elapsed: int,
         task_text: str,
+        context_usage: Optional[float] = None,
+        session_actions: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Handle successful task completion."""
         handler = LongOutputHandler(self.ctx.messaging)
@@ -288,6 +316,8 @@ class TaskHandler(BaseHandler):
             content=result.full_text or result.summary or "（任务已完成）",
             success=True,
             context_path=path,
+            context_usage=context_usage,
+            session_actions=session_actions,
         )
 
         if strategy == "paginate":
@@ -315,6 +345,8 @@ class TaskHandler(BaseHandler):
         prog_mid: Optional[str],
         result: RunResult,
         elapsed: int,
+        context_usage: Optional[float] = None,
+        session_actions: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Handle task error."""
         partial = result.as_brief(300)
@@ -323,6 +355,52 @@ class TaskHandler(BaseHandler):
             error_message=f"{result.error or '未知错误'}\n\n{partial}",
             context_path=path,
         )
+        # Add context usage & actions to error card manually
+        if context_usage is not None or session_actions:
+            error_card["elements"].append(divider())
+        if context_usage is not None:
+            pct = min(max(context_usage, 0.0), 1.0) * 100
+            filled = int(pct // 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            color_hint = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴"
+            from kimix_lark_bot.feishu_card_kit.core import note
+            error_card["elements"].append(
+                note(f"{color_hint} Context 容量: {bar} {pct:.1f}%")
+            )
+        if session_actions:
+            sess_id = session_actions.get("session_id", "")
+            port = session_actions.get("port", 0)
+            from kimix_lark_bot.feishu_card_kit.core import button, action_row, ButtonStyle
+            buttons = []
+            if sess_id:
+                buttons.append(
+                    button(
+                        "🗑️ 清空对话",
+                        "callback",
+                        {
+                            "action": "clear_session",
+                            "session_id": sess_id,
+                            "port": port,
+                            "path": path,
+                        },
+                        ButtonStyle.DANGER,
+                    )
+                )
+                buttons.append(
+                    button(
+                        "🆕 新建对话",
+                        "callback",
+                        {
+                            "action": "new_session",
+                            "port": port,
+                            "path": path,
+                        },
+                        ButtonStyle.PRIMARY,
+                    )
+                )
+            if buttons:
+                error_card["elements"].append(action_row(buttons))
+
         if prog_mid:
             self.ctx.messaging.update_card(prog_mid, error_card)
         else:

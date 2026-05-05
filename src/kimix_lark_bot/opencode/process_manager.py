@@ -236,6 +236,17 @@ class OpenCodeProcessManager:
                 lines.append(f"   ⚠ {proc.last_error}")
         return "\n".join(lines)
 
+    def set_session_id(self, path: str, session_id: str) -> bool:
+        """更新指定工作区的 API session ID。"""
+        resolved = self._resolve_path(path, must_exist=False)
+        path = resolved or path
+        proc = self._processes.get(path)
+        if proc:
+            proc.session_id = session_id
+            self._save_state()
+            return True
+        return False
+
     def find_by_slug(
         self, slug: str, projects: List[Dict[str, Any]]
     ) -> Optional[str]:

@@ -99,6 +99,8 @@ class LongContentSplitter:
         title: str,
         content: str,
         success: bool = True,
+        context_usage: Optional[float] = None,
+        session_actions: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Create multiple paginated cards for very long content.
 
@@ -106,6 +108,8 @@ class LongContentSplitter:
             title: Base title for all cards
             content: Full content
             success: Success status
+            context_usage: Optional context usage ratio (0.0-1.0), shown on first page only
+            session_actions: Optional dict with session_id, port, path for action buttons on first page only
 
         Returns:
             List of card dicts
@@ -115,12 +119,17 @@ class LongContentSplitter:
         total = len(chunks)
 
         for i, chunk in enumerate(chunks, 1):
+            # Only show context usage & actions on the first page
+            usage = context_usage if i == 1 else None
+            actions = session_actions if i == 1 else None
             card = CardRenderer.result_paginated(
                 title=title,
                 content=chunk,
                 page=i,
                 total_pages=total,
                 success=success,
+                context_usage=usage,
+                session_actions=actions,
             )
             cards.append(card)
 
@@ -199,6 +208,8 @@ class LongOutputHandler:
         content: str,
         success: bool = True,
         context_path: str = "",
+        context_usage: Optional[float] = None,
+        session_actions: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Any]:
         """Process long content and return appropriate output.
 
@@ -207,6 +218,8 @@ class LongOutputHandler:
             content: Content to display
             success: Whether operation succeeded
             context_path: Optional workspace context path
+            context_usage: Optional context usage ratio (0.0-1.0)
+            session_actions: Optional dict with session_id, port, path for action buttons
 
         Returns:
             Tuple of (strategy, result):
@@ -222,6 +235,8 @@ class LongOutputHandler:
                 content=content,
                 success=success,
                 context_path=context_path,
+                context_usage=context_usage,
+                session_actions=session_actions,
             )
             return strategy, card
 
@@ -230,6 +245,8 @@ class LongOutputHandler:
                 title=title,
                 content=content,
                 success=success,
+                context_usage=context_usage,
+                session_actions=session_actions,
             )
             return strategy, cards
 
@@ -247,6 +264,8 @@ class LongOutputHandler:
                     f"\n\n前 500 字符预览：\n{content[:500]}...",
                     success=success,
                     context_path=context_path,
+                    context_usage=context_usage,
+                    session_actions=session_actions,
                 )
             return strategy, card
 
@@ -260,6 +279,8 @@ class LongOutputHandler:
         message_id: Optional[str] = None,
         success: bool = True,
         context_path: str = "",
+        context_usage: Optional[float] = None,
+        session_actions: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         """Process and send long content via messaging client.
 
@@ -270,6 +291,8 @@ class LongOutputHandler:
             message_id: Optional message ID to reply to
             success: Success status
             context_path: Context path
+            context_usage: Optional context usage ratio (0.0-1.0)
+            session_actions: Optional dict with session_id, port, path for action buttons
 
         Returns:
             List of sent message IDs
@@ -278,7 +301,9 @@ class LongOutputHandler:
             print(f"[LongOutput] No messaging client, would send {len(content)} chars")
             return []
 
-        strategy, result = self.process(title, content, success, context_path)
+        strategy, result = self.process(
+            title, content, success, context_path, context_usage, session_actions
+        )
         message_ids: List[str] = []
 
         if strategy == "paginate":

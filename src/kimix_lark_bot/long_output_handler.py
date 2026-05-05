@@ -52,14 +52,21 @@ def handle_long_output(
     message_id: Optional[str] = None,
     success: bool = True,
     context_path: str = "",
+    context_usage: Optional[float] = None,
+    session_actions: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Convenience function with SailZen defaults."""
     handler = LongOutputHandler(messaging_client)
 
     if chat_id and messaging_client:
-        return handler.send(title, content, chat_id, message_id, success, context_path)
+        return handler.send(
+            title, content, chat_id, message_id, success, context_path,
+            context_usage, session_actions,
+        )
     else:
-        strategy, result = handler.process(title, content, success, context_path)
+        strategy, result = handler.process(
+            title, content, success, context_path, context_usage, session_actions
+        )
         return result
 
 

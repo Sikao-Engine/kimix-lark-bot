@@ -91,6 +91,14 @@ class CardActionHandler(BaseHandler):
             if action_type == "confirm_self_update":
                 return self._handle_confirm_self_update(value, chat_id)
 
+            # Handle clear_session action
+            if action_type == "clear_session":
+                return self._handle_clear_session(value, chat_id, message_id)
+
+            # Handle new_session action
+            if action_type == "new_session":
+                return self._handle_new_session(value, chat_id, message_id)
+
             # Route other actions to background execution
             return self._route_to_background(action_type, path, chat_id, message_id)
 
@@ -372,6 +380,135 @@ class CardActionHandler(BaseHandler):
                         "zh_cn": "正在启动更新...",
                         "en_us": "Starting update...",
                     },
+                }
+            }
+        )
+
+    def _handle_clear_session(self, value: dict, chat_id: str, message_id: str) -> Any:
+        """Handle clear session button click."""
+        session_id = value.get("session_id") if isinstance(value, dict) else None
+        port = value.get("port") if isinstance(value, dict) else None
+
+        if not session_id or not port:
+            return P2CardActionTriggerResponse(
+                {
+                    "toast": {
+                        "type": "error",
+                        "content": "缺少会话信息",
+                        "i18n": {"zh_cn": "缺少会话信息", "en_us": "Missing session info"},
+                    }
+                }
+            )
+
+        def do_clear():
+            import asyncio
+            from kimix_lark_bot.opencode.client import OpenCodeAsyncClient
+            from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
+
+            async def _clear():
+                client = OpenCodeAsyncClient(port=port)
+                try:
+                    ok = await client.clear_session(session_id)
+                    return ok
+                finally:
+                    await client.close()
+
+            try:
+                ok = asyncio.run(_clear())
+                if ok:
+                    card = CardRenderer.result(
+                        "已清空",
+                        "当前对话的 context 已清空，可以继续提问。",
+                        success=True,
+                    )
+                else:
+                    card = CardRenderer.error(
+                        "清空失败",
+                        "后端返回失败，请稍后重试。",
+                    )
+            except Exception as exc:
+                logger.error("[CardAction] clear_session error: %s", exc, exc_info=True)
+                card = CardRenderer.error(
+                    "清空失败",
+                    f"调用后端出错: {exc}",
+                )
+            self.ctx.messaging.update_card(message_id, card)
+
+        threading.Thread(target=do_clear, daemon=True).start()
+
+        return P2CardActionTriggerResponse(
+            {
+                "toast": {
+                    "type": "info",
+                    "content": "正在清空对话...",
+                    "i18n": {"zh_cn": "正在清空对话...", "en_us": "Clearing session..."},
+                }
+            }
+        )
+
+    def _handle_new_session(self, value: dict, chat_id: str, message_id: str) -> Any:
+        """Handle new session button click."""
+        port = value.get("port") if isinstance(value, dict) else None
+        path = value.get("path") if isinstance(value, dict) else None
+
+        if not port or not path:
+            return P2CardActionTriggerResponse(
+                {
+                    "toast": {
+                        "type": "error",
+                        "content": "缺少会话信息",
+                        "i18n": {"zh_cn": "缺少会话信息", "en_us": "Missing session info"},
+                    }
+                }
+            )
+
+        def do_new():
+            import asyncio
+            from pathlib import Path
+            from kimix_lark_bot.opencode.client import OpenCodeAsyncClient
+            from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
+
+            async def _new():
+                client = OpenCodeAsyncClient(port=port)
+                try:
+                    sess = await client.create_session(
+                        title=f"SailZen - {Path(path).name}"
+                    )
+                    return sess.id if sess else None
+                finally:
+                    await client.close()
+
+            try:
+                new_sess_id = asyncio.run(_new())
+                if new_sess_id:
+                    # Update process manager session id
+                    self.ctx.process_mgr.set_session_id(path, new_sess_id)
+                    card = CardRenderer.result(
+                        "新对话已创建",
+                        f"新 session ID: `{new_sess_id[:16]}...`\n可以直接发送新任务。",
+                        success=True,
+                    )
+                else:
+                    card = CardRenderer.error(
+                        "创建失败",
+                        "后端未返回 session ID。",
+                    )
+            except Exception as exc:
+                logger.error("[CardAction] new_session error: %s", exc, exc_info=True)
+                card = CardRenderer.error(
+                    "创建失败",
+                    f"调用后端出错: {exc}",
+                )
+            self.ctx.messaging.update_card(message_id, card)
+
+        threading.Thread(target=do_new, daemon=True).start()
+
+        return P2CardActionTriggerResponse(
+            {
+                "toast": {
+                    "type": "info",
+                    "content": "正在创建新对话...",
+                    "i18n": {"zh_cn": "正在创建新对话...", "en_us": "Creating new session..."},
                 }
             }
         )

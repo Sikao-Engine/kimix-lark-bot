@@ -479,8 +479,12 @@ class CardRenderer:
 
         if tools:
             elements.append(divider())
-            elements.append(text("🔧 **工具调用**", bold=True))
-            for tc in tools:
+            total_tools = len(tools)
+            elements.append(text(f"🔧 **工具调用** ({total_tools} 次)", bold=True))
+
+            # Only show the most recent 10 calls to keep the card compact
+            display_tools = tools[-10:]
+            for tc in display_tools:
                 name = tc.get("title") or tc.get("name", "unknown")
                 status = tc.get("status", "unknown")
                 icon = _tool_icons.get(status, "🔧")
@@ -488,7 +492,10 @@ class CardRenderer:
                 call_id = tc.get("call_id", "")
                 tool_input = tc.get("input", "")
 
-                # Main line: icon + name + status
+                # Shorten call_id: strip 'tool_' prefix and keep first 6 hex chars
+                short_id = call_id[5:11] if call_id.startswith("tool_") else call_id[:6]
+
+                # Main line: icon + name
                 main_line = f"{icon} {name}"
                 if error:
                     main_line += f" ❌ {error[:40]}"
@@ -496,15 +503,16 @@ class CardRenderer:
 
                 # Detail line in smaller text (grey tone via note)
                 details: List[str] = []
-                if call_id:
-                    details.append(f"id: {call_id[:24]}")
-                if status:
-                    details.append(f"status: {status}")
+                if short_id:
+                    details.append(f"id: {short_id}")
                 if tool_input:
                     inp = tool_input[:60] + "..." if len(tool_input) > 60 else tool_input
                     details.append(f"args: {inp}")
                 if details:
                     elements.append(note(f"  ┗ {' | '.join(details)}"))
+
+            if total_tools > 10:
+                elements.append(note(f"... 还有 {total_tools - 10} 个较早的调用"))
 
         if elapsed_seconds is not None:
             elements.append(divider())
@@ -677,6 +685,8 @@ class CardRenderer:
         undo_deadline: Optional[float] = None,
         context_path: str = "",
         max_content_length: int = 8000,
+        context_usage: Optional[float] = None,
+        session_actions: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a result card.
 
@@ -690,6 +700,8 @@ class CardRenderer:
             undo_deadline: Unix timestamp for undo window
             context_path: Optional workspace path for context hints
             max_content_length: Maximum content length before truncation
+            context_usage: Optional context usage ratio (0.0-1.0)
+            session_actions: Optional dict with session_id, port, path for action buttons
         """
         color = CardColor.GREEN if success else CardColor.RED
         icon = "✅" if success else "❌"
@@ -718,6 +730,53 @@ class CardRenderer:
             elements.append(divider())
             for n in notes:
                 elements.append(note(n))
+
+        # Context usage bar + session action buttons
+        if context_usage is not None or session_actions:
+            elements.append(divider())
+
+        if context_usage is not None:
+            pct = min(max(context_usage, 0.0), 1.0) * 100
+            filled = int(pct // 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            color_hint = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴"
+            elements.append(
+                note(f"{color_hint} Context 容量: {bar} {pct:.1f}%")
+            )
+
+        if session_actions:
+            buttons: List[Dict[str, Any]] = []
+            sess_id = session_actions.get("session_id", "")
+            port = session_actions.get("port", 0)
+            path = session_actions.get("path", "")
+            if sess_id:
+                buttons.append(
+                    button(
+                        "🗑️ 清空对话",
+                        "callback",
+                        {
+                            "action": "clear_session",
+                            "session_id": sess_id,
+                            "port": port,
+                            "path": path,
+                        },
+                        ButtonStyle.DANGER,
+                    )
+                )
+                buttons.append(
+                    button(
+                        "🆕 新建对话",
+                        "callback",
+                        {
+                            "action": "new_session",
+                            "port": port,
+                            "path": path,
+                        },
+                        ButtonStyle.PRIMARY,
+                    )
+                )
+            if buttons:
+                elements.append(action_row(buttons))
 
         return card(
             elements=elements,
@@ -770,6 +829,8 @@ class CardRenderer:
         page: int = 1,
         total_pages: int = 1,
         success: bool = True,
+        context_usage: Optional[float] = None,
+        session_actions: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a paginated result card for very long content.
 
@@ -779,6 +840,8 @@ class CardRenderer:
             page: Current page number (1-indexed)
             total_pages: Total number of pages
             success: Whether the operation succeeded
+            context_usage: Optional context usage ratio (0.0-1.0)
+            session_actions: Optional dict with session_id, port, path for action buttons
         """
         color = CardColor.GREEN if success else CardColor.RED
         icon = "✅" if success else "❌"
@@ -793,6 +856,53 @@ class CardRenderer:
             if page < total_pages:
                 page_info += " | 发送「下一页」查看更多"
             elements.append(note(page_info))
+
+        # Context usage bar + session action buttons
+        if context_usage is not None or session_actions:
+            elements.append(divider())
+
+        if context_usage is not None:
+            pct = min(max(context_usage, 0.0), 1.0) * 100
+            filled = int(pct // 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            color_hint = "🟢" if pct < 50 else "🟡" if pct < 80 else "🔴"
+            elements.append(
+                note(f"{color_hint} Context 容量: {bar} {pct:.1f}%")
+            )
+
+        if session_actions:
+            buttons: List[Dict[str, Any]] = []
+            sess_id = session_actions.get("session_id", "")
+            port = session_actions.get("port", 0)
+            path = session_actions.get("path", "")
+            if sess_id:
+                buttons.append(
+                    button(
+                        "🗑️ 清空对话",
+                        "callback",
+                        {
+                            "action": "clear_session",
+                            "session_id": sess_id,
+                            "port": port,
+                            "path": path,
+                        },
+                        ButtonStyle.DANGER,
+                    )
+                )
+                buttons.append(
+                    button(
+                        "🆕 新建对话",
+                        "callback",
+                        {
+                            "action": "new_session",
+                            "port": port,
+                            "path": path,
+                        },
+                        ButtonStyle.PRIMARY,
+                    )
+                )
+            if buttons:
+                elements.append(action_row(buttons))
 
         return card(
             elements=elements,

@@ -304,6 +304,21 @@ class OpenCodeAsyncClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def clear_session(self, session_id: str) -> bool:
+        """清除指定 session 的上下文。"""
+        resp = await self._client.get(
+            f"{self._base_url}/session/{session_id}/clear"
+        )
+        return resp.status_code == 200
+
+    async def get_session_context(self, session_id: str) -> Dict[str, Any]:
+        """获取指定 session 的上下文信息（含 context_usage）。"""
+        resp = await self._client.get(
+            f"{self._base_url}/session/{session_id}/context"
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     # ── Messaging ─────────────────────────────────────────────────
 
     async def send_prompt_async(
