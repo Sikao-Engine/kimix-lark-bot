@@ -37,11 +37,11 @@ COMPONENT_SHORT = {
 
 # 日志级别颜色 (仅用于支持颜色的终端)
 LEVEL_COLORS = {
-    "DEBUG": "\033[36m",    # Cyan
-    "INFO": "\033[32m",     # Green
-    "WARN": "\033[33m",     # Yellow
-    "ERROR": "\033[31m",    # Red
-    "FATAL": "\033[35m",    # Magenta
+    "DEBUG": "\033[36m",  # Cyan
+    "INFO": "\033[32m",  # Green
+    "WARN": "\033[33m",  # Yellow
+    "ERROR": "\033[31m",  # Red
+    "FATAL": "\033[35m",  # Magenta
     "RESET": "\033[0m",
 }
 
@@ -59,11 +59,16 @@ def _format_component(component: str) -> str:
     return COMPONENT_SHORT.get(component, component)
 
 
-def log(level: str, component: str, message: str, 
-        use_color: bool = False, file: Optional[object] = None) -> None:
+def log(
+    level: str,
+    component: str,
+    message: str,
+    use_color: bool = False,
+    file: Optional[object] = None,
+) -> None:
     """
     输出统一格式的日志
-    
+
     Args:
         level: 日志级别 (DEBUG, INFO, WARN, ERROR, FATAL)
         component: 组件名称
@@ -74,14 +79,14 @@ def log(level: str, component: str, message: str,
     timestamp = _get_timestamp()
     comp = _format_component(component)
     level = level.upper()
-    
+
     if use_color and level in LEVEL_COLORS:
         color = LEVEL_COLORS[level]
         reset = LEVEL_COLORS["RESET"]
         output = f"{color}[{timestamp}] [{level}] [{comp}] {message}{reset}"
     else:
         output = f"[{timestamp}] [{level}] [{comp}] {message}"
-    
+
     target = file if file else sys.stdout
     print(output, file=target)
 
@@ -107,6 +112,7 @@ def debug(component: str, message: str) -> None:
 
 
 # ===== 快捷方法 - 用于各组件 =====
+
 
 def msg_handler(message: str, chat_id: str = "", level: str = "INFO") -> None:
     """MessageHandler 日志"""
@@ -143,10 +149,11 @@ def session(message: str, level: str = "INFO") -> None:
 
 # ===== 任务进度专用日志 =====
 
+
 def task_progress(task_id: str, action: str, detail: str = "") -> None:
     """
     任务进度日志
-    
+
     Args:
         task_id: 任务ID
         action: 动作 (started, running, completed, failed, cancelled)
@@ -166,11 +173,12 @@ def task_progress(task_id: str, action: str, detail: str = "") -> None:
     log("INFO", "Async", f"{icon} {task_id[:16]}...{suffix}")
 
 
-def task_status(task_id: str, status: str, elapsed: int, 
-                last_activity: str = "", extra: str = "") -> None:
+def task_status(
+    task_id: str, status: str, elapsed: int, last_activity: str = "", extra: str = ""
+) -> None:
     """
     任务状态报告（用于长时间运行的任务）
-    
+
     Args:
         task_id: 任务ID
         status: 当前状态
@@ -178,15 +186,19 @@ def task_status(task_id: str, status: str, elapsed: int,
         last_activity: 最后活动描述
         extra: 额外信息
     """
-    elapsed_str = f"{elapsed//60}m{elapsed%60}s" if elapsed >= 60 else f"{elapsed}s"
+    elapsed_str = f"{elapsed // 60}m{elapsed % 60}s" if elapsed >= 60 else f"{elapsed}s"
     activity = f" | last: {last_activity}" if last_activity else ""
     extra_str = f" | {extra}" if extra else ""
-    
-    log("INFO", "Async", 
-        f"[~] {task_id[:16]}... status={status} elapsed={elapsed_str}{activity}{extra_str}")
+
+    log(
+        "INFO",
+        "Async",
+        f"[~] {task_id[:16]}... status={status} elapsed={elapsed_str}{activity}{extra_str}",
+    )
 
 
 # ===== 消息内容专用日志 =====
+
 
 def user_message(text: str, chat_id: str = "") -> None:
     """
@@ -205,11 +217,11 @@ def ai_response(content: str, task_id: str = "", msg_id: str = "") -> None:
     打印 AI 响应（简洁格式）
     """
     prefix = f"[{task_id[:16]}...] " if task_id else ""
-    lines = content.strip().split('\n')
-    
+    lines = content.strip().split("\n")
+
     print(f"{prefix}[AI] Response ({len(content)} chars):")
     print("-" * 60)
-    
+
     # 显示前10行或前500字符
     preview = []
     length = 0
@@ -218,9 +230,9 @@ def ai_response(content: str, task_id: str = "", msg_id: str = "") -> None:
             break
         preview.append(line)
         length += len(line) + 1
-    
-    print('\n'.join(preview))
-    
+
+    print("\n".join(preview))
+
     if len(lines) > 15 or length < len(content):
         remaining_lines = len(lines) - 15
         remaining_chars = len(content) - length
@@ -228,5 +240,5 @@ def ai_response(content: str, task_id: str = "", msg_id: str = "") -> None:
             print(f"... ({remaining_lines} more lines, {remaining_chars} chars)")
         else:
             print(f"... ({remaining_chars} more chars)")
-    
+
     print("-" * 60)

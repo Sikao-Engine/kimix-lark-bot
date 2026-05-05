@@ -33,11 +33,27 @@ from kimix_lark_bot.context import (
     ConversationContext,
     ActionPlan,
     PendingConfirmation,
-    _CONFIRM_WORDS,
-    _CANCEL_WORDS,
 )
 from kimix_lark_bot.feishu_card_kit.renderer import CardRenderer
 from kimix_lark_bot.opencode import extract_path_from_text
+
+_CONFIRM_WORDS = {
+    "是",
+    "是的",
+    "确认",
+    "确定",
+    "y",
+    "yes",
+    "ok",
+    "好",
+    "行",
+    "可以",
+    "没错",
+    "对",
+    "对的",
+}
+_CANCEL_WORDS = {"否", "不是", "取消", "不", "n", "no", "算了", "别", "不要", "拒绝"}
+
 
 def _make_gateway(
     config_provider: Optional[str] = None, config_api_key: Optional[str] = None

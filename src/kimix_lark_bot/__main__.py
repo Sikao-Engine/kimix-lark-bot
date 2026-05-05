@@ -1,8 +1,11 @@
 import argparse
 import sys
 from pathlib import Path
+import logging
 from kimix_lark_bot.config import create_default_config, load_config
 from kimix_lark_bot.agent import FeishuBotAgent
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Worker logic
@@ -16,9 +19,9 @@ def run_worker(config_path: str, restore_state: bool = False) -> int:
         0 for normal exit, 42 for self-update restart
     """
     if not Path(config_path).exists():
-        print(f"Config not found: {config_path}")
+        logger.info(f"Config not found: {config_path}")
         create_default_config(config_path)
-        print(f"\nPlease edit: {config_path}")
+        logger.info(f"\nPlease edit: {config_path}")
         return 1
 
     config = load_config(config_path)
@@ -43,9 +46,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Feishu OpenCode Bridge - Connect Feishu messages to OpenCode sessions"
     )
-    parser.add_argument(
-        "--config", "-c", default="bot.yaml", help="Config file path"
-    )
+    parser.add_argument("--config", "-c", default="bot.yaml", help="Config file path")
     parser.add_argument(
         "--init", action="store_true", help="Create default config and exit"
     )

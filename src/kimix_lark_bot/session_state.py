@@ -60,6 +60,7 @@ def is_valid_transition(current: SessionState, next_state: SessionState) -> bool
 # 2.1.4 / 3.3.1 State change event hooks
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SessionStateEntry:
     path: str
@@ -113,6 +114,7 @@ class SessionStateEntry:
 
 
 StateChangeHook = Callable[[str, SessionState, SessionState, SessionStateEntry], None]
+
 
 class SessionStateStore:
     def __init__(self) -> None:
@@ -330,7 +332,9 @@ class OperationTracker:
             )
         return op_id
 
-    def register_cancel_callback(self, op_id: str, callback: Callable[[], None]) -> None:
+    def register_cancel_callback(
+        self, op_id: str, callback: Callable[[], None]
+    ) -> None:
         """Register a callback that will be invoked when cancel() is called.
 
         This is the key mechanism: TaskHandler registers the SessionRunner.cancel
@@ -375,7 +379,9 @@ class OperationTracker:
             try:
                 callback()
             except Exception as exc:
-                logger.error("[OperationTracker] cancel callback error for %s: %s", op_id, exc)
+                logger.error(
+                    "[OperationTracker] cancel callback error for %s: %s", op_id, exc
+                )
         return found
 
     def get(self, op_id: str) -> Optional[ActiveOperation]:

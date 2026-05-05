@@ -5,8 +5,6 @@ from datetime import datetime
 
 _HISTORY_WINDOW = 6
 
-_CONFIRM_WORDS = {"是", "是的", "确认", "确定", "y", "yes", "ok", "好", "行", "可以", "没错", "对", "对的"}
-_CANCEL_WORDS = {"否", "不是", "取消", "不", "n", "no", "算了", "别", "不要", "拒绝"}
 
 # ---------------------------------------------------------------------------
 # Conversation context
@@ -19,11 +17,13 @@ class ActionPlan:
     confirm_summary: str = ""
     reply: str = ""
 
+
 @dataclass
 class TurnRecord:
     role: str
     text: str
     ts: datetime = field(default_factory=datetime.now)
+
 
 @dataclass
 class PendingConfirmation:

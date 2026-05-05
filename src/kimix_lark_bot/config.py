@@ -66,6 +66,7 @@ def load_config(config_path: str) -> AgentConfig:
     try:
         with open(p, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
+
         config.app_id = data.get("app_id", "")
         config.app_secret = data.get("app_secret", "")
         config.base_port = data.get("base_port", 4096)

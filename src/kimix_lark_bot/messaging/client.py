@@ -34,6 +34,7 @@ from kimix_lark_bot.feishu_card_kit.tracker import (
 
 logger = logging.getLogger(__name__)
 
+
 class _RateLimiter:
     def __init__(self, max_calls: int = 20, period: float = 1.0):
         self._max = max_calls
@@ -70,7 +71,11 @@ class FeishuMessagingClient:
     - Track card metadata
     """
 
-    def __init__(self, lark_client: Optional[lark.Client] = None, default_chat_id: Optional[str] = None):
+    def __init__(
+        self,
+        lark_client: Optional[lark.Client] = None,
+        default_chat_id: Optional[str] = None,
+    ):
         self.lark_client = lark_client
         self.default_chat_id = default_chat_id
         self.card_tracker = CardMessageTracker()
@@ -95,7 +100,9 @@ class FeishuMessagingClient:
             True if successful, False otherwise
         """
         if not self.default_chat_id:
-            logger.warning("No default_chat_id configured, cannot send proactive message")
+            logger.warning(
+                "No default_chat_id configured, cannot send proactive message"
+            )
             return False
         return self.send_text(self.default_chat_id, text)
 

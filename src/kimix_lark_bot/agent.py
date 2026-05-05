@@ -1,15 +1,10 @@
 # -*- coding: utf-8 -*-
 # @file agent.py
-# @brief Feishu Bot Agent - Main entry point (v3.0 refactored)
+# @brief Feishu Bot Agent - Main entry point
 # @author sailing-innocent
 # @date 2026-04-25
-# @version 3.0
 # ---------------------------------
 """Feishu Bot Agent - Main entry point.
-
-v3.0: 使用 kimix_lark_bot.opencode 基础设施层，精简 self-update，
-移除对 async_task_manager / session_manager / opencode_client 的直接依赖。
-
 协调组件:
 - Message handling (via MessageHandler)
 - Card action handling (via CardActionHandler)
@@ -19,13 +14,10 @@ v3.0: 使用 kimix_lark_bot.opencode 基础设施层，精简 self-update，
 - Self-update (via SelfUpdateOrchestrator, exit code 42)
 """
 
-from pathlib import Path
 from typing import Optional, Dict, Any
 import json
 import threading
-import traceback
 import logging
-from datetime import datetime
 
 import lark_oapi as lark
 
@@ -34,7 +26,6 @@ from kimix_lark_bot.config import AgentConfig
 from kimix_lark_bot.session_state import (
     ConfirmationManager,
     OperationTracker,
-    SessionState,
     SessionStateStore,
 )
 from kimix_lark_bot.brain import BotBrain
@@ -277,7 +268,7 @@ class FeishuBotAgent:
         """
         self._lifecycle.cleanup_previous_instances()
 
-        print(f"Feishu Agent Bridge v8.0 (tool={self.config.cli_tool})")
+        logger.info(f"Feishu Agent Bridge v8.0 (tool={self.config.cli_tool})")
         logger.info("Config: %s", self.config.config_path)
 
         if not self.config.app_id or not self.config.app_secret:

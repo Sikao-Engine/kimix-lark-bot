@@ -5,6 +5,7 @@
 # @date 2026-04-07
 # @version 1.0
 # ---------------------------------
+
 """Centralized path management.
 
 All persistent data files (state, logs, backups) are stored under a single
